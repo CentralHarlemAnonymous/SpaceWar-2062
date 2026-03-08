@@ -1,11 +1,19 @@
 // NeuralAIController.swift
-// Drop-in CoreML inference for SpaceWar 2062.
+// Supports two CoreML models:
+//   SpaceWarAI-bounce.mlpackage  — trained with bounce edges
+//   SpaceWarAI-wrap.mlpackage    — trained with wrap edges
 //
-// Add SpaceWarAI.mlpackage to your Xcode project target, then
-// add this file to the same target.
+// Call predict(..., edgeBehavior: .bounce/.wrap) and the correct model
+// is used automatically.  If a model file is missing the controller
+// falls back to the other one and logs a warning; if both are missing
+// it returns .noOp every frame.
 //
-// Observation vector (46 floats) must match spacewar_env.py _obs() exactly.
-// Action encoding must match export_coreml.py logit layout exactly.
+// OBSERVATION DIFFERENCE between bounce and wrap models:
+//   Bounce: obs[6-7]  = opponent absolute position / (W, H)
+//           obs[14+]  = bullet position relative to me (raw delta) / (W, H)
+//   Wrap:   obs[6-7]  = nearest-torus delta to opponent / (W, H)
+//           obs[14+]  = nearest-torus delta to bullet / (W, H)
+// Everything else (indices 0-5, 8-13) is identical between the two models.
 
 import CoreML
 import SpriteKit
@@ -16,35 +24,52 @@ import Foundation
 final class NeuralAIController {
 
     // ------------------------------------------------------------------ //
-    // Constants — must match spacewar_env.py                              //
+    // Constants — must match spacewar_env*.py exactly                      //
     // ------------------------------------------------------------------ //
-    private static let worldW:       Float = 3000
-    private static let worldH:       Float = 3000
-    private static let maxSpeed:     Float = 400
-    private static let bulletSpeed:  Float = 480
+    private static let worldW:      Float = 3000
+    private static let worldH:      Float = 3000
+    private static let maxSpeed:    Float = 400
+    private static let bulletSpeed: Float = 480
     private static let maxEnemyBullets = 8
-    static         let obsSize             = 46      // 14 + 8*4
+    static         let obsSize          = 46
 
     // ------------------------------------------------------------------ //
-    // Decoded action                                                       //
+    // Edge behavior (mirrors GameScene.EdgeBehavior)                       //
+    // ------------------------------------------------------------------ //
+    enum EdgeBehavior { case bounce, wrap }
+
+    // ------------------------------------------------------------------ //
+    // Decoded action                                                        //
     // ------------------------------------------------------------------ //
     struct Action {
-        /// -1 = rotate left, 0 = hold, +1 = rotate right
-        let rotate: Int
+        let rotate: Int   // -1 = left, 0 = hold, +1 = right
         let thrust: Bool
         let fire:   Bool
+        static let noOp = Action(rotate: 0, thrust: false, fire: false)
     }
 
     // ------------------------------------------------------------------ //
-    // Model                                                                //
+    // Models                                                                //
     // ------------------------------------------------------------------ //
-    private let model: MLModel
+    private let bounceModel: MLModel?
+    private let wrapModel:   MLModel?
 
-    /// Returns nil and logs an error if the mlpackage is missing from the bundle.
-    init?() {
+    init() {
+        bounceModel = NeuralAIController.loadModel(named: "SpaceWarAI-bounce")
+        wrapModel   = NeuralAIController.loadModel(named: "SpaceWarAI-wrap")
+
+        if bounceModel == nil {
+            print("[NeuralAIController] SpaceWarAI-bounce.mlpackage not found.")
+        }
+        if wrapModel == nil {
+            print("[NeuralAIController] SpaceWarAI-wrap.mlpackage not found.")
+        }
+    }
+
+    private static func loadModel(named name: String) -> MLModel? {
         guard
-            let url = Bundle.main.url(forResource: "SpaceWarAI",
-                                      withExtension: "mlpackage"),
+            let url      = Bundle.main.url(forResource: name,
+                                            withExtension: "mlpackage"),
             let compiled = try? MLModel.compileModel(at: url),
             let loaded   = try? MLModel(contentsOf: compiled,
                                         configuration: {
@@ -52,32 +77,21 @@ final class NeuralAIController {
                                             c.computeUnits = .all
                                             return c
                                         }())
-        else {
-            print("[NeuralAIController] Failed to load SpaceWarAI.mlpackage — "
-                + "check it is added to the Xcode target.")
-            return nil
+        else { return nil }
+        return loaded
+    }
+
+    func isAvailable(for edge: EdgeBehavior) -> Bool {
+        switch edge {
+        case .bounce: return bounceModel != nil
+        case .wrap:   return wrapModel   != nil
         }
-        self.model = loaded
     }
 
     // ------------------------------------------------------------------ //
-    // Inference                                                            //
+    // Inference                                                             //
     // ------------------------------------------------------------------ //
 
-    /// Build the observation vector and run one forward pass.
-    ///
-    /// - Parameters:
-    ///   - ship:         The controlled ship's SKShapeNode.
-    ///   - shipVel:      Ship velocity in world px/s.
-    ///   - shipAngle:    Ship zRotation in radians (SpriteKit convention).
-    ///   - opponent:     Opponent ship's SKShapeNode.
-    ///   - opponentVel:  Opponent velocity.
-    ///   - opponentAngle: Opponent zRotation.
-    ///   - enemyBullets: Bullets fired by the opponent:
-    ///                   array of (world position, world velocity).
-    ///   - sunPosition:  Sun centre in world coordinates.
-    ///
-    /// - Returns: Decoded action, or a safe no-op on any error.
     func predict(
         ship:          SKShapeNode,
         shipVel:       CGVector,
@@ -86,52 +100,90 @@ final class NeuralAIController {
         opponentVel:   CGVector,
         opponentAngle: CGFloat,
         enemyBullets:  [(pos: CGPoint, vel: CGVector)],
-        sunPosition:   CGPoint
+        sunPosition:   CGPoint,
+        edgeBehavior:  EdgeBehavior
     ) -> Action {
-        var obs = [Float](repeating: 0, count: Self.obsSize)
-        let W   = Self.worldW
-        let H   = Self.worldH
-        let ms  = Self.maxSpeed
-        let bs  = Self.bulletSpeed
 
-        // [0-1] my position
+        // Pick model; fall back gracefully if one is missing
+        let model: MLModel
+        switch edgeBehavior {
+        case .bounce:
+            if let m = bounceModel      { model = m }
+            else if let m = wrapModel   { model = m }
+            else                        { return .noOp }
+        case .wrap:
+            if let m = wrapModel        { model = m }
+            else if let m = bounceModel { model = m }
+            else                        { return .noOp }
+        }
+
+        let W  = Self.worldW
+        let H  = Self.worldH
+        let ms = Self.maxSpeed
+        let bs = Self.bulletSpeed
+
+        var obs = [Float](repeating: 0, count: Self.obsSize)
+
+        // [0-1] My absolute position
         obs[0] = Float(ship.position.x) / W
         obs[1] = Float(ship.position.y) / H
-        // [2-3] my velocity
+        // [2-3] My velocity
         obs[2] = Float(shipVel.dx) / ms
         obs[3] = Float(shipVel.dy) / ms
-        // [4-5] my heading
+        // [4-5] My heading
         obs[4] = Float(sin(shipAngle))
         obs[5] = Float(cos(shipAngle))
-        // [6-7] opponent position
-        obs[6] = Float(opponent.position.x) / W
-        obs[7] = Float(opponent.position.y) / H
-        // [8-9] opponent velocity
-        obs[8] = Float(opponentVel.dx) / ms
-        obs[9] = Float(opponentVel.dy) / ms
-        // [10-11] opponent heading
+
+        // [6-7] Opponent — absolute for bounce, torus-delta for wrap
+        switch edgeBehavior {
+        case .bounce:
+            obs[6] = Float(opponent.position.x) / W
+            obs[7] = Float(opponent.position.y) / H
+        case .wrap:
+            let (odx, ody) = torusDelta(
+                ax: Float(ship.position.x), ay: Float(ship.position.y),
+                bx: Float(opponent.position.x), by: Float(opponent.position.y))
+            obs[6] = odx / W
+            obs[7] = ody / H
+        }
+
+        // [8-9] Opponent velocity
+        obs[8]  = Float(opponentVel.dx) / ms
+        obs[9]  = Float(opponentVel.dy) / ms
+        // [10-11] Opponent heading
         obs[10] = Float(sin(opponentAngle))
         obs[11] = Float(cos(opponentAngle))
-        // [12-13] sun direction (relative to me, normalised)
+        // [12-13] Sun direction (relative to me)
         obs[12] = Float(sunPosition.x - ship.position.x) / W
         obs[13] = Float(sunPosition.y - ship.position.y) / H
 
-        // [14-45] closest 8 enemy bullets
-        let sorted = enemyBullets.sorted {
-            let d0 = pow($0.pos.x - ship.position.x, 2) + pow($0.pos.y - ship.position.y, 2)
-            let d1 = pow($1.pos.x - ship.position.x, 2) + pow($1.pos.y - ship.position.y, 2)
-            return d0 < d1
+        // [14-45] Closest enemy bullets, sorted by shortest-path distance
+        let mx = Float(ship.position.x)
+        let my = Float(ship.position.y)
+
+        let sorted = enemyBullets.sorted { a, b in
+            let (adx, ady) = bulletDelta(mx: mx, my: my,
+                                          bx: Float(a.pos.x), by: Float(a.pos.y),
+                                          edge: edgeBehavior)
+            let (bdx, bdy) = bulletDelta(mx: mx, my: my,
+                                          bx: Float(b.pos.x), by: Float(b.pos.y),
+                                          edge: edgeBehavior)
+            return adx*adx + ady*ady < bdx*bdx + bdy*bdy
         }
+
         for i in 0 ..< Self.maxEnemyBullets {
             let base = 14 + i * 4
             if i < sorted.count {
-                let b = sorted[i]
-                obs[base + 0] = Float(b.pos.x - ship.position.x) / W
-                obs[base + 1] = Float(b.pos.y - ship.position.y) / H
-                obs[base + 2] = Float(b.vel.dx) / bs
-                obs[base + 3] = Float(b.vel.dy) / bs
+                let bullet = sorted[i]
+                let (bdx, bdy) = bulletDelta(
+                    mx: mx, my: my,
+                    bx: Float(bullet.pos.x), by: Float(bullet.pos.y),
+                    edge: edgeBehavior)
+                obs[base + 0] = bdx / W
+                obs[base + 1] = bdy / H
+                obs[base + 2] = Float(bullet.vel.dx) / bs
+                obs[base + 3] = Float(bullet.vel.dy) / bs
             }
-            // else: already zero from initialisation
         }
 
         // ---------------------------------------------------------------- //
@@ -143,9 +195,7 @@ final class NeuralAIController {
                 dataType: .float32)
         else { return .noOp }
 
-        for i in 0 ..< Self.obsSize {
-            inputArr[i] = NSNumber(value: obs[i])
-        }
+        for i in 0 ..< Self.obsSize { inputArr[i] = NSNumber(value: obs[i]) }
 
         guard
             let provider = try? MLDictionaryFeatureProvider(
@@ -155,21 +205,40 @@ final class NeuralAIController {
                                  .multiArrayValue
         else { return .noOp }
 
-        // ---------------------------------------------------------------- //
-        // Decode: argmax within each action group                           //
-        // Layout: [0:3] rotate | [3:5] thrust | [5:7] fire                 //
-        // ---------------------------------------------------------------- //
-        let rotIdx  = argmax(logits, start: 0, count: 3)   // 0=left 1=none 2=right
-        let thrIdx  = argmax(logits, start: 3, count: 2)   // 0=off  1=on
-        let fireIdx = argmax(logits, start: 5, count: 2)   // 0=no   1=yes
+        let rotIdx  = argmax(logits, start: 0, count: 3)
+        let thrIdx  = argmax(logits, start: 3, count: 2)
+        let fireIdx = argmax(logits, start: 5, count: 2)
 
-        let rotate: Int = rotIdx == 0 ? -1 : (rotIdx == 2 ? 1 : 0)
-        return Action(rotate: rotate, thrust: thrIdx == 1, fire: fireIdx == 1)
+        return Action(
+            rotate: rotIdx == 0 ? -1 : (rotIdx == 2 ? 1 : 0),
+            thrust: thrIdx  == 1,
+            fire:   fireIdx == 1)
     }
 
     // ------------------------------------------------------------------ //
-    // Helpers                                                              //
+    // Helpers                                                               //
     // ------------------------------------------------------------------ //
+
+    private func torusDelta(ax: Float, ay: Float,
+                             bx: Float, by: Float) -> (Float, Float) {
+        let W = Self.worldW, H = Self.worldH
+        var dx = bx - ax
+        var dy = by - ay
+        if      dx >  W / 2 { dx -= W }
+        else if dx < -W / 2 { dx += W }
+        if      dy >  H / 2 { dy -= H }
+        else if dy < -H / 2 { dy += H }
+        return (dx, dy)
+    }
+
+    private func bulletDelta(mx: Float, my: Float,
+                              bx: Float, by: Float,
+                              edge: EdgeBehavior) -> (Float, Float) {
+        switch edge {
+        case .bounce: return (bx - mx, by - my)
+        case .wrap:   return torusDelta(ax: mx, ay: my, bx: bx, by: by)
+        }
+    }
 
     private func argmax(_ arr: MLMultiArray, start: Int, count: Int) -> Int {
         var bestIdx = 0
@@ -182,51 +251,25 @@ final class NeuralAIController {
     }
 }
 
-extension NeuralAIController.Action {
-    static let noOp = NeuralAIController.Action(rotate: 0, thrust: false, fire: false)
-}
-
-// MARK: - GameScene integration sketch
+// MARK: - GameScene integration
 //
-// 1. Add a property to GameScene:
-//      private let neuralAI = NeuralAIController()
+// Replace the existing neuralAI predict call in the wedgeAIIntelligence == 3
+// rotation block with the version below.  The only change is the added
+// edgeBehavior parameter — everything else stays the same.
 //
-// 2. In the AI rotation block, where you currently call rotateShip / strategicPositionTarget,
-//    add a new branch for neural AI (e.g. intelligence level 3):
+//   let edgeMode: NeuralAIController.EdgeBehavior =
+//       (edgeBehavior == .wrap) ? .wrap : .bounce
 //
-//      if wedgeAIIntelligence == 3, let ai = neuralAI {
-//          // Collect opponent bullets
-//          var enemyBullets: [(pos: CGPoint, vel: CGVector)] = []
-//          enumerateChildNodes(withName: "missile") { node, _ in
-//              guard let owner = self.missileOwner.object(forKey: node),
-//                    owner === self.needle.node,
-//                    let data = node.userData,
-//                    let vx = data["vx"] as? CGFloat,
-//                    let vy = data["vy"] as? CGFloat else { return }
-//              enemyBullets.append((pos: node.position,
-//                                   vel: CGVector(dx: vx, dy: vy)))
-//          }
-//          let sunPos = sunNode?.position ?? CGPoint(x: 1500, y: 1500)
-//          let action = ai.predict(
-//              ship:          dart.node,
-//              shipVel:       dart.velocity,
-//              shipAngle:     dart.node.zRotation,
-//              opponent:      needle.node,
-//              opponentVel:   needle.velocity,
-//              opponentAngle: needle.node.zRotation,
-//              enemyBullets:  enemyBullets,
-//              sunPosition:   sunPos)
+//   let action = ai.predict(
+//       ship:          dart.node,
+//       shipVel:       dart.velocity,
+//       shipAngle:     dart.node.zRotation,
+//       opponent:      needle.node,
+//       opponentVel:   needle.velocity,
+//       opponentAngle: needle.node.zRotation,
+//       enemyBullets:  enemyBullets,
+//       sunPosition:   sunPos,
+//       edgeBehavior:  edgeMode)
 //
-//          // Apply rotation
-//          if action.rotate != 0 {
-//              dart.node.zRotation += CGFloat(action.rotate) * rotationSpeed * CGFloat(dt)
-//          }
-//          isThrustingDart = action.thrust
-//          if action.fire && currentTime >= wedgeAINextFireTime {
-//              fireMissile(from: dart, muzzleOffset: muzzleOffset(for: dart))
-//              wedgeAINextFireTime = currentTime + 0.1
-//          }
-//      }
-//
-// Note: wire up the neural AI after validating it in a test build first.
-//       The handcrafted expert AI (intelligence == 2) remains as a fallback.
+// Also drag SpaceWarAI-wrap.mlpackage into Xcode once training completes
+// (Target Membership checked).  SpaceWarAI-bounce.mlpackage stays as-is.
