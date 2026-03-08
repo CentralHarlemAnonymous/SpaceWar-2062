@@ -2,4 +2,4 @@
 
 Now, armed with vastly greater processing power, I'm trying again. Ideally, the game will allow network play as well.
 
-This code is NOT in the public domain. I retain all rights.
+This code is NOT in the public domain. I retain all rights, copyright 2026.
