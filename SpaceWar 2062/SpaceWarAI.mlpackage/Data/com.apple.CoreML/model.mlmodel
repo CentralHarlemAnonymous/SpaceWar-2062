@@ -1,23 +1,23 @@
-‰
+˘
 
 observation
 *
-3†ÄR
+1†ÄR
 action_logits
 *
-êÄ¢®
-GSpaceWar 2062 neural AI ‚Äî bounce mode, variable gravity & bullet life¢4
-#com.github.apple.coremltools.sourcetorch==2.10.0¢:
+êÄ¢Ω
+\SpaceWar 2062 neural AI ‚Äî universal model (bounce+wrap, arbitrary gravity and bullet life)¢+
+$com.github.apple.coremltools.version9.0¢:
 +com.github.apple.coremltools.source_dialectTorchScript¢:
 ,com.github.apple.coremltools.conversion_date
-2026-03-09¢+
-$com.github.apple.coremltools.version9.0≤∑…
+2026-03-08¢4
+#com.github.apple.coremltools.sourcetorch==2.10.0≤∑…
 main¿
 !
 observation
 
 
-3CoreML6ë
+1CoreML6ë
 CoreML6Öaction_logitsz
 const#
 observation_to_fp16_dtype_0
@@ -36,7 +36,7 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 Ä
-3*?
+1*?
 name7
 /
 -"+
@@ -45,7 +45,7 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 Ä
-3*"
+1*"
 @model_path/weights/weight.bin@æ
 const8
 'mlp_extractor_policy_net_0_bias_to_fp16
@@ -60,34 +60,34 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 Ä*$
-@model_path/weights/weight.binÄÕè
-cast
-x
-
-observation(
+@model_path/weights/weight.binÄ≈è
+cast(
 dtype
 
-observation_to_fp16_dtype_0)
+observation_to_fp16_dtype_0
+x
+
+observation)
 observation_to_fp16
 
 
 
-3*
+1*
 name
 
 
 "
 cast_2È
-linear
+linear7
+weight-
++
+)mlp_extractor_policy_net_0_weight_to_fp16
 x
 
 observation_to_fp163
 bias+
 )
-'mlp_extractor_policy_net_0_bias_to_fp167
-weight-
-+
-)mlp_extractor_policy_net_0_weight_to_fp16)
+'mlp_extractor_policy_net_0_bias_to_fp16)
 linear_0_cast_fp16
 
 
@@ -125,7 +125,7 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 Ä
 Ä*$
-@model_path/weights/weight.bin¿—æ
+@model_path/weights/weight.bin¿…æ
 const8
 'mlp_extractor_policy_net_2_bias_to_fp16
 
@@ -139,17 +139,17 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 Ä*$
-@model_path/weights/weight.binÄ“	Á
-linear
+@model_path/weights/weight.binÄ 	Á
+linear7
+weight-
++
+)mlp_extractor_policy_net_2_weight_to_fp16
 x
 
 input_5_cast_fp163
 bias+
 )
-'mlp_extractor_policy_net_2_bias_to_fp167
-weight-
-+
-)mlp_extractor_policy_net_2_weight_to_fp16)
+'mlp_extractor_policy_net_2_bias_to_fp16)
 linear_1_cast_fp16
 
 
@@ -187,7 +187,7 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 Ä*$
-@model_path/weights/weight.bin¿÷	å
+@model_path/weights/weight.bin¿Œ	å
 const'
 action_net_bias_to_fp16
 
@@ -204,17 +204,17 @@ $com.github.apple.coremltools.version9.0≤∑…
 
 
 :
-«*ê+yØ,¨ÓßÓ'ø
-linear
+()˝©ˇ$u¨u,O´O+ø
+linear'
+weight
+
+action_net_weight_to_fp16
 x
 
 input_cast_fp16#
 bias
 
-action_net_bias_to_fp16'
-weight
-
-action_net_weight_to_fp16#
+action_net_bias_to_fp16#
 action_logits
 
 

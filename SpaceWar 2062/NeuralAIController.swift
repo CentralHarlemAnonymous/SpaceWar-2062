@@ -1,19 +1,42 @@
 // NeuralAIController.swift
-// Supports two CoreML models:
-//   SpaceWarAI-bounce.mlpackage  — trained with bounce edges
-//   SpaceWarAI-wrap.mlpackage    — trained with wrap edges
+// SpaceWar 2062
+// Copyright © 2026 Michael Stern. All rights reserved.
 //
-// Call predict(..., edgeBehavior: .bounce/.wrap) and the correct model
-// is used automatically.  If a model file is missing the controller
-// falls back to the other one and logs a warning; if both are missing
-// it returns .noOp every frame.
+// Loads two separate CoreML models:
+//   SpaceWarAI-bounce.mlpackage  — 51-float observation
+//   SpaceWarAI-wrap.mlpackage    — 49-float observation
 //
-// OBSERVATION DIFFERENCE between bounce and wrap models:
-//   Bounce: obs[6-7]  = opponent absolute position / (W, H)
-//           obs[14+]  = bullet position relative to me (raw delta) / (W, H)
-//   Wrap:   obs[6-7]  = nearest-torus delta to opponent / (W, H)
-//           obs[14+]  = nearest-torus delta to bullet / (W, H)
-// Everything else (indices 0-5, 8-13) is identical between the two models.
+// The correct model is selected automatically from the edgeBehavior parameter.
+//
+// Observation layouts
+// -------------------
+// BOUNCE (51 floats):
+//   [0-1]   my position / (3000, 3000)
+//   [2-3]   my velocity / 400
+//   [4-5]   sin/cos my heading
+//   [6-7]   (opponent - me) raw delta / (3000, 3000)
+//   [8-9]   opponent velocity / 400
+//   [10-11] sin/cos opponent heading
+//   [12-13] (sun - me) / (3000, 3000)
+//   [14-45] 8 enemy bullets × 4  [raw delta_x/3000, delta_y/3000, vx/480, vy/480]
+//   [46]    gravityMultiplier / 10.0
+//   [47]    bulletLife / 9.0
+//   [48]    min(x, 3000-x) / 1500   (wall proximity x; 0=wall, 1=center)
+//   [49]    min(y, 3000-y) / 1500   (wall proximity y; 0=wall, 1=center)
+//   [50]    min(1, opponentBulletsRemaining / 50)   (0=unarmed, 1=full/unlimited)
+//
+// WRAP (49 floats):
+//   [0-1]   my position / (3000, 3000)
+//   [2-3]   my velocity / 400
+//   [4-5]   sin/cos my heading
+//   [6-7]   torus delta to opponent / (3000, 3000)
+//   [8-9]   opponent velocity / 400
+//   [10-11] sin/cos opponent heading
+//   [12-13] (sun - me) / (3000, 3000)
+//   [14-45] 8 enemy bullets × 4  [torus delta_x/3000, torus delta_y/3000, vx/480, vy/480]
+//   [46]    gravityMultiplier / 10.0
+//   [47]    bulletLife / 9.0
+//   [48]    min(1, opponentBulletsRemaining / 50)   (0=unarmed, 1=full/unlimited)
 
 import CoreML
 import SpriteKit
@@ -24,25 +47,28 @@ import Foundation
 final class NeuralAIController {
 
     // ------------------------------------------------------------------ //
-    // Constants — must match spacewar_env*.py exactly                      //
+    // Physics constants — must match training envs exactly                 //
     // ------------------------------------------------------------------ //
-    private static let worldW:      Float = 3000
-    private static let worldH:      Float = 3000
-    private static let maxSpeed:    Float = 400
-    private static let bulletSpeed: Float = 480
-    private static let maxEnemyBullets = 8
-    static         let obsSize          = 46
+    private static let worldW:            Float = 3000
+    private static let worldH:            Float = 3000
+    private static let maxSpeed:          Float = 400
+    private static let bulletSpeed:       Float = 480
+    private static let gravityMax:        Float = 10.0
+    private static let bulletLifeMax:     Float = 9.0
+    private static let bulletLimitNorm:   Float = 50.0
+    private static let maxEnemyBullets          = 8
 
     // ------------------------------------------------------------------ //
-    // Edge behavior (mirrors GameScene.EdgeBehavior)                       //
+    // Edge behavior                                                         //
     // ------------------------------------------------------------------ //
     enum EdgeBehavior { case bounce, wrap }
 
     // ------------------------------------------------------------------ //
-    // Decoded action                                                        //
+    // Decoded action                                                         //
     // ------------------------------------------------------------------ //
     struct Action {
-        let rotate: Int   // -1 = left, 0 = hold, +1 = right
+        /// -1 = rotate left, 0 = hold, +1 = rotate right
+        let rotate: Int
         let thrust: Bool
         let fire:   Bool
         static let noOp = Action(rotate: 0, thrust: false, fire: false)
@@ -51,24 +77,22 @@ final class NeuralAIController {
     // ------------------------------------------------------------------ //
     // Models                                                                //
     // ------------------------------------------------------------------ //
-    private let bounceModel: MLModel?
-    private let wrapModel:   MLModel?
+    private let bounceModel: MLModel?   // 51-float obs
+    private let wrapModel:   MLModel?   // 49-float obs
+
+    var isBounceAvailable: Bool { bounceModel != nil }
+    var isWrapAvailable:   Bool { wrapModel   != nil }
 
     init() {
-        bounceModel = NeuralAIController.loadModel(named: "SpaceWarAI-bounce")
-        wrapModel   = NeuralAIController.loadModel(named: "SpaceWarAI-wrap")
-
-        if bounceModel == nil {
-            print("[NeuralAIController] SpaceWarAI-bounce.mlpackage not found.")
-        }
-        if wrapModel == nil {
-            print("[NeuralAIController] SpaceWarAI-wrap.mlpackage not found.")
-        }
+        bounceModel = NeuralAIController.load(resource: "SpaceWarAI-bounce")
+        wrapModel   = NeuralAIController.load(resource: "SpaceWarAI-wrap")
+        if bounceModel == nil { print("[NeuralAI] SpaceWarAI-bounce.mlpackage not found.") }
+        if wrapModel   == nil { print("[NeuralAI] SpaceWarAI-wrap.mlpackage not found.")   }
     }
 
-    private static func loadModel(named name: String) -> MLModel? {
+    private static func load(resource: String) -> MLModel? {
         guard
-            let url      = Bundle.main.url(forResource: name,
+            let url      = Bundle.main.url(forResource: resource,
                                             withExtension: "mlpackage"),
             let compiled = try? MLModel.compileModel(at: url),
             let loaded   = try? MLModel(contentsOf: compiled,
@@ -81,121 +105,185 @@ final class NeuralAIController {
         return loaded
     }
 
-    func isAvailable(for edge: EdgeBehavior) -> Bool {
-        switch edge {
-        case .bounce: return bounceModel != nil
-        case .wrap:   return wrapModel   != nil
-        }
-    }
-
     // ------------------------------------------------------------------ //
     // Inference                                                             //
     // ------------------------------------------------------------------ //
 
+    /// - Parameter opponentBulletsRemaining: pass Int.max for unlimited
     func predict(
-        ship:          SKShapeNode,
-        shipVel:       CGVector,
-        shipAngle:     CGFloat,
-        opponent:      SKShapeNode,
-        opponentVel:   CGVector,
-        opponentAngle: CGFloat,
-        enemyBullets:  [(pos: CGPoint, vel: CGVector)],
-        sunPosition:   CGPoint,
-        edgeBehavior:  EdgeBehavior
+        ship:                      SKShapeNode,
+        shipVel:                   CGVector,
+        shipAngle:                 CGFloat,
+        opponent:                  SKShapeNode,
+        opponentVel:               CGVector,
+        opponentAngle:             CGFloat,
+        enemyBullets:              [(pos: CGPoint, vel: CGVector)],
+        sunPosition:               CGPoint,
+        edgeBehavior:              EdgeBehavior,
+        gravityMultiplier:         CGFloat,
+        bulletLife:                CGFloat,
+        opponentBulletsRemaining:  Int
     ) -> Action {
 
-        // Pick model; fall back gracefully if one is missing
-        let model: MLModel
+        let opponentBulletFrac: Float = opponentBulletsRemaining == Int.max
+            ? 1.0
+            : min(1.0, Float(opponentBulletsRemaining) / Self.bulletLimitNorm)
+
         switch edgeBehavior {
         case .bounce:
-            if let m = bounceModel      { model = m }
-            else if let m = wrapModel   { model = m }
-            else                        { return .noOp }
+            guard let model = bounceModel else { return .noOp }
+            let obs = buildBounceObs(
+                ship: ship, shipVel: shipVel, shipAngle: shipAngle,
+                opponent: opponent, opponentVel: opponentVel, opponentAngle: opponentAngle,
+                enemyBullets: enemyBullets, sunPosition: sunPosition,
+                gravityMultiplier: gravityMultiplier, bulletLife: bulletLife,
+                opponentBulletFrac: opponentBulletFrac)
+            return runModel(model, obs: obs, size: 51)
+
         case .wrap:
-            if let m = wrapModel        { model = m }
-            else if let m = bounceModel { model = m }
-            else                        { return .noOp }
+            guard let model = wrapModel else { return .noOp }
+            let obs = buildWrapObs(
+                ship: ship, shipVel: shipVel, shipAngle: shipAngle,
+                opponent: opponent, opponentVel: opponentVel, opponentAngle: opponentAngle,
+                enemyBullets: enemyBullets, sunPosition: sunPosition,
+                gravityMultiplier: gravityMultiplier, bulletLife: bulletLife,
+                opponentBulletFrac: opponentBulletFrac)
+            return runModel(model, obs: obs, size: 49)
         }
+    }
 
-        let W  = Self.worldW
-        let H  = Self.worldH
-        let ms = Self.maxSpeed
-        let bs = Self.bulletSpeed
+    // ------------------------------------------------------------------ //
+    // Observation builders                                                  //
+    // ------------------------------------------------------------------ //
 
-        var obs = [Float](repeating: 0, count: Self.obsSize)
+    private func buildBounceObs(
+        ship: SKShapeNode, shipVel: CGVector, shipAngle: CGFloat,
+        opponent: SKShapeNode, opponentVel: CGVector, opponentAngle: CGFloat,
+        enemyBullets: [(pos: CGPoint, vel: CGVector)],
+        sunPosition: CGPoint,
+        gravityMultiplier: CGFloat,
+        bulletLife: CGFloat,
+        opponentBulletFrac: Float
+    ) -> [Float] {
 
-        // [0-1] My absolute position
-        obs[0] = Float(ship.position.x) / W
-        obs[1] = Float(ship.position.y) / H
-        // [2-3] My velocity
-        obs[2] = Float(shipVel.dx) / ms
-        obs[3] = Float(shipVel.dy) / ms
-        // [4-5] My heading
-        obs[4] = Float(sin(shipAngle))
-        obs[5] = Float(cos(shipAngle))
+        let W = Self.worldW, H = Self.worldH
+        let ms = Self.maxSpeed, bs = Self.bulletSpeed
+        var o = [Float](repeating: 0, count: 51)
 
-        // [6-7] Opponent — absolute for bounce, torus-delta for wrap
-        switch edgeBehavior {
-        case .bounce:
-            obs[6] = Float(opponent.position.x) / W
-            obs[7] = Float(opponent.position.y) / H
-        case .wrap:
-            let (odx, ody) = torusDelta(
-                ax: Float(ship.position.x), ay: Float(ship.position.y),
-                bx: Float(opponent.position.x), by: Float(opponent.position.y))
-            obs[6] = odx / W
-            obs[7] = ody / H
-        }
+        o[0]  = Float(ship.position.x) / W
+        o[1]  = Float(ship.position.y) / H
+        o[2]  = Float(shipVel.dx) / ms
+        o[3]  = Float(shipVel.dy) / ms
+        o[4]  = Float(sin(shipAngle))
+        o[5]  = Float(cos(shipAngle))
+        o[6]  = Float(opponent.position.x - ship.position.x) / W
+        o[7]  = Float(opponent.position.y - ship.position.y) / H
+        o[8]  = Float(opponentVel.dx) / ms
+        o[9]  = Float(opponentVel.dy) / ms
+        o[10] = Float(sin(opponentAngle))
+        o[11] = Float(cos(opponentAngle))
+        o[12] = Float(sunPosition.x - ship.position.x) / W
+        o[13] = Float(sunPosition.y - ship.position.y) / H
 
-        // [8-9] Opponent velocity
-        obs[8]  = Float(opponentVel.dx) / ms
-        obs[9]  = Float(opponentVel.dy) / ms
-        // [10-11] Opponent heading
-        obs[10] = Float(sin(opponentAngle))
-        obs[11] = Float(cos(opponentAngle))
-        // [12-13] Sun direction (relative to me)
-        obs[12] = Float(sunPosition.x - ship.position.x) / W
-        obs[13] = Float(sunPosition.y - ship.position.y) / H
-
-        // [14-45] Closest enemy bullets, sorted by shortest-path distance
-        let mx = Float(ship.position.x)
-        let my = Float(ship.position.y)
-
-        let sorted = enemyBullets.sorted { a, b in
-            let (adx, ady) = bulletDelta(mx: mx, my: my,
-                                          bx: Float(a.pos.x), by: Float(a.pos.y),
-                                          edge: edgeBehavior)
-            let (bdx, bdy) = bulletDelta(mx: mx, my: my,
-                                          bx: Float(b.pos.x), by: Float(b.pos.y),
-                                          edge: edgeBehavior)
+        let mx = Float(ship.position.x), my = Float(ship.position.y)
+        let sorted = enemyBullets.sorted {
+            let adx = Float($0.pos.x) - mx; let ady = Float($0.pos.y) - my
+            let bdx = Float($1.pos.x) - mx; let bdy = Float($1.pos.y) - my
             return adx*adx + ady*ady < bdx*bdx + bdy*bdy
         }
-
         for i in 0 ..< Self.maxEnemyBullets {
             let base = 14 + i * 4
             if i < sorted.count {
-                let bullet = sorted[i]
-                let (bdx, bdy) = bulletDelta(
-                    mx: mx, my: my,
-                    bx: Float(bullet.pos.x), by: Float(bullet.pos.y),
-                    edge: edgeBehavior)
-                obs[base + 0] = bdx / W
-                obs[base + 1] = bdy / H
-                obs[base + 2] = Float(bullet.vel.dx) / bs
-                obs[base + 3] = Float(bullet.vel.dy) / bs
+                let b = sorted[i]
+                o[base]     = (Float(b.pos.x) - mx) / W
+                o[base + 1] = (Float(b.pos.y) - my) / H
+                o[base + 2] = Float(b.vel.dx) / bs
+                o[base + 3] = Float(b.vel.dy) / bs
             }
         }
 
-        // ---------------------------------------------------------------- //
-        // Run model                                                          //
-        // ---------------------------------------------------------------- //
+        o[46] = Float(gravityMultiplier) / Self.gravityMax
+        o[47] = Float(bulletLife)        / Self.bulletLifeMax
+        o[48] = min(Float(ship.position.x), W - Float(ship.position.x)) / (W / 2)
+        o[49] = min(Float(ship.position.y), H - Float(ship.position.y)) / (H / 2)
+        o[50] = opponentBulletFrac
+
+        return o
+    }
+
+    private func buildWrapObs(
+        ship: SKShapeNode, shipVel: CGVector, shipAngle: CGFloat,
+        opponent: SKShapeNode, opponentVel: CGVector, opponentAngle: CGFloat,
+        enemyBullets: [(pos: CGPoint, vel: CGVector)],
+        sunPosition: CGPoint,
+        gravityMultiplier: CGFloat,
+        bulletLife: CGFloat,
+        opponentBulletFrac: Float
+    ) -> [Float] {
+
+        let W = Self.worldW, H = Self.worldH
+        let ms = Self.maxSpeed, bs = Self.bulletSpeed
+        var o = [Float](repeating: 0, count: 49)
+
+        o[0]  = Float(ship.position.x) / W
+        o[1]  = Float(ship.position.y) / H
+        o[2]  = Float(shipVel.dx) / ms
+        o[3]  = Float(shipVel.dy) / ms
+        o[4]  = Float(sin(shipAngle))
+        o[5]  = Float(cos(shipAngle))
+
+        let (odx, ody) = torusDelta(
+            ax: Float(ship.position.x), ay: Float(ship.position.y),
+            bx: Float(opponent.position.x), by: Float(opponent.position.y))
+        o[6]  = odx / W
+        o[7]  = ody / H
+
+        o[8]  = Float(opponentVel.dx) / ms
+        o[9]  = Float(opponentVel.dy) / ms
+        o[10] = Float(sin(opponentAngle))
+        o[11] = Float(cos(opponentAngle))
+        o[12] = Float(sunPosition.x - ship.position.x) / W
+        o[13] = Float(sunPosition.y - ship.position.y) / H
+
+        let mx = Float(ship.position.x), my = Float(ship.position.y)
+        let sorted = enemyBullets.sorted {
+            let (adx, ady) = torusDelta(ax: mx, ay: my,
+                                         bx: Float($0.pos.x), by: Float($0.pos.y))
+            let (bdx, bdy) = torusDelta(ax: mx, ay: my,
+                                         bx: Float($1.pos.x), by: Float($1.pos.y))
+            return adx*adx + ady*ady < bdx*bdx + bdy*bdy
+        }
+        for i in 0 ..< Self.maxEnemyBullets {
+            let base = 14 + i * 4
+            if i < sorted.count {
+                let b = sorted[i]
+                let (bdx, bdy) = torusDelta(ax: mx, ay: my,
+                                             bx: Float(b.pos.x), by: Float(b.pos.y))
+                o[base]     = bdx / W
+                o[base + 1] = bdy / H
+                o[base + 2] = Float(b.vel.dx) / bs
+                o[base + 3] = Float(b.vel.dy) / bs
+            }
+        }
+
+        o[46] = Float(gravityMultiplier) / Self.gravityMax
+        o[47] = Float(bulletLife)        / Self.bulletLifeMax
+        o[48] = opponentBulletFrac
+
+        return o
+    }
+
+    // ------------------------------------------------------------------ //
+    // Model runner                                                          //
+    // ------------------------------------------------------------------ //
+
+    private func runModel(_ model: MLModel, obs: [Float], size: Int) -> Action {
         guard
             let inputArr = try? MLMultiArray(
-                shape:    [1, NSNumber(value: Self.obsSize)],
-                dataType: .float32)
+                shape: [1, NSNumber(value: size)], dataType: .float32)
         else { return .noOp }
 
-        for i in 0 ..< Self.obsSize { inputArr[i] = NSNumber(value: obs[i]) }
+        for i in 0 ..< size { inputArr[i] = NSNumber(value: obs[i]) }
 
         guard
             let provider = try? MLDictionaryFeatureProvider(
@@ -222,22 +310,12 @@ final class NeuralAIController {
     private func torusDelta(ax: Float, ay: Float,
                              bx: Float, by: Float) -> (Float, Float) {
         let W = Self.worldW, H = Self.worldH
-        var dx = bx - ax
-        var dy = by - ay
+        var dx = bx - ax, dy = by - ay
         if      dx >  W / 2 { dx -= W }
         else if dx < -W / 2 { dx += W }
         if      dy >  H / 2 { dy -= H }
         else if dy < -H / 2 { dy += H }
         return (dx, dy)
-    }
-
-    private func bulletDelta(mx: Float, my: Float,
-                              bx: Float, by: Float,
-                              edge: EdgeBehavior) -> (Float, Float) {
-        switch edge {
-        case .bounce: return (bx - mx, by - my)
-        case .wrap:   return torusDelta(ax: mx, ay: my, bx: bx, by: by)
-        }
     }
 
     private func argmax(_ arr: MLMultiArray, start: Int, count: Int) -> Int {
@@ -251,25 +329,20 @@ final class NeuralAIController {
     }
 }
 
-// MARK: - GameScene integration
+// MARK: - GameScene integration note
 //
-// Replace the existing neuralAI predict call in the wedgeAIIntelligence == 3
-// rotation block with the version below.  The only change is the added
-// edgeBehavior parameter — everything else stays the same.
+// In the wedgeAIIntelligence == 3 block, update the predict call to:
 //
-//   let edgeMode: NeuralAIController.EdgeBehavior =
-//       (edgeBehavior == .wrap) ? .wrap : .bounce
-//
-//   let action = ai.predict(
-//       ship:          dart.node,
-//       shipVel:       dart.velocity,
-//       shipAngle:     dart.node.zRotation,
-//       opponent:      needle.node,
-//       opponentVel:   needle.velocity,
-//       opponentAngle: needle.node.zRotation,
-//       enemyBullets:  enemyBullets,
-//       sunPosition:   sunPos,
-//       edgeBehavior:  edgeMode)
-//
-// Also drag SpaceWarAI-wrap.mlpackage into Xcode once training completes
-// (Target Membership checked).  SpaceWarAI-bounce.mlpackage stays as-is.
+//   let action = neuralAI.predict(
+//       ship:                     dart.node,
+//       shipVel:                  dart.velocity,
+//       shipAngle:                dart.node.zRotation,
+//       opponent:                 needle.node,
+//       opponentVel:              needle.velocity,
+//       opponentAngle:            needle.node.zRotation,
+//       enemyBullets:             enemyBullets,
+//       sunPosition:              sunPos,
+//       edgeBehavior:             edgeMode,
+//       gravityMultiplier:        gravityMultiplier,
+//       bulletLife:               bulletLifeSeconds,
+//       opponentBulletsRemaining: needleBulletsRemaining)

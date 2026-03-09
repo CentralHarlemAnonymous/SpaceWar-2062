@@ -3,6 +3,7 @@
 //  SpaceWar 2062
 //
 //  Created by Michael Stern on 1/9/26.
+//  Copyright © 2026 Michael Stern. All rights reserved.
 //
 
 import SpriteKit
@@ -183,14 +184,25 @@ final class GameScene: SKScene {
     private var sunToggleButton: SKShapeNode?
     private var bulletGravToggleButton: SKShapeNode?
 
-    private var gravityStrengthStrong: Bool = true
-    private var bulletLifeLong: Bool = false
-    private var gravityWeakButton: SKShapeNode?
-    private var gravityStrongButton: SKShapeNode?
-    private var gravityStrengthLabel: SKLabelNode?
-    private var bulletLifeShortButton: SKShapeNode?
-    private var bulletLifeLongButton: SKShapeNode?
-    private var bulletLifeLabel: SKLabelNode?
+    // Gravity slider: 10 steps, value = step × 4.0  →  0, 4, 8 … 40
+    // Step 2 = 8.0 (original "strong" default)
+    private var gravitySliderSelection: Int = 2
+    private let gravitySliderSteps:     Int = 10
+    private var gravitySliderTrack: SKShapeNode?
+    private var gravitySliderKnob:  SKShapeNode?
+    private var gravityValueLabel:  SKLabelNode?
+
+    // Bullet-life slider: 10 steps, value = 1.5 + step × 0.75  →  1.5 … 9.0 s
+    // Step 2 = 3.0 s (original "short" default)
+    private var bulletLifeSliderSelection: Int = 2
+    private let bulletLifeSliderSteps:     Int = 10
+    private var bulletLifeSliderTrack: SKShapeNode?
+    private var bulletLifeSliderKnob:  SKShapeNode?
+    private var bulletLifeValueLabel:  SKLabelNode?
+
+    // Computed values used throughout physics and AI
+    private var gravityMultiplier: CGFloat { CGFloat(gravitySliderSelection) * 4.0 }
+    private var bulletLifeSeconds: CGFloat { 1.5 + CGFloat(bulletLifeSliderSelection) * 0.75 }
 
     // Bullet sliders
     private var needleBulletSliderTrack: SKShapeNode?
@@ -215,6 +227,8 @@ final class GameScene: SKScene {
     private var draggingNeedleAISliderTouch: UITouch?
     private var draggingWedgeAISliderTouch: UITouch?
     private var draggingVirtualScreenSliderTouch: UITouch?
+    private var draggingGravitySliderTouch: UITouch?
+    private var draggingBulletLifeSliderTouch: UITouch?
     private var newMatchButtonTouch: UITouch?   // tracks press for invert-on-touch
 
     // Virtual screen mode
@@ -794,7 +808,7 @@ final class GameScene: SKScene {
         var vx = ship.velocity.dx,     vy = ship.velocity.dy
         let sx = sun.position.x, sy = sun.position.y
         let sunR = sunCollisionRadius + 10
-        let baseG: CGFloat = 18000 * (gravityStrengthStrong ? 8.0 : 2.0)
+        let baseG: CGFloat = 18000 * gravityMultiplier
         for _ in 0..<steps {
             let dx = sx - px, dy = sy - py
             let r2 = dx*dx + dy*dy + 100
@@ -818,7 +832,7 @@ final class GameScene: SKScene {
         var bx = ship.node.position.x, by = ship.node.position.y
         var bvx = -bulletSpeed * sin(angle), bvy = bulletSpeed * cos(angle)
         let simStep: CGFloat = 0.05
-        let fullLife: CGFloat = bulletLifeLong ? 6.0 : 3.0
+        let fullLife: CGFloat = bulletLifeSeconds
         // Only simulate until bullet reaches the opponent (plus a small buffer).
         // Simulating beyond impact distance causes false positives where the bullet
         // curves into the sun long after it would have already hit or missed.
@@ -833,7 +847,7 @@ final class GameScene: SKScene {
         let simSteps = Int(simLife / simStep)
         let sx = sun.position.x, sy = sun.position.y
         let sunR = sunCollisionRadius
-        let baseG: CGFloat = 18000 * (gravityStrengthStrong ? 5.0 : 1.0)
+        let baseG: CGFloat = 18000 * gravityMultiplier * (5.0 / 8.0)
         for _ in 0..<simSteps {
             if sunAffectsBullets {
                 let dx = sx - bx, dy = sy - by
@@ -998,9 +1012,9 @@ final class GameScene: SKScene {
             var tx = target.node.position.x, ty = target.node.position.y
             let tvx = target.velocity.dx,    tvy = target.velocity.dy
             let simStep: CGFloat = 0.05
-            let simLife: CGFloat = self.bulletLifeLong ? 6.0 : 3.0
+            let simLife: CGFloat = self.bulletLifeSeconds
             let simSteps = Int(simLife / simStep)
-            let baseG: CGFloat = 18000 * (self.gravityStrengthStrong ? 5.0 : 1.0)
+            let baseG: CGFloat = 18000 * self.gravityMultiplier * (5.0 / 8.0)
             for _ in 0..<simSteps {
                 if let sun = self.sunNode {
                     if self.sunAffectsBullets {
@@ -1033,11 +1047,11 @@ final class GameScene: SKScene {
         var bx = shooter.node.position.x, by = shooter.node.position.y
         var bvx = -bulletSpeed * sin(angle), bvy = bulletSpeed * cos(angle)
         let simStep: CGFloat = 0.05
-        let simLife: CGFloat = bulletLifeLong ? 6.0 : 3.0
+        let simLife: CGFloat = bulletLifeSeconds
         let simSteps = Int(simLife / simStep)
         var tx = target.node.position.x, ty = target.node.position.y
         let tvx = target.velocity.dx,    tvy = target.velocity.dy
-        let baseG: CGFloat = 18000 * (gravityStrengthStrong ? 5.0 : 1.0)
+        let baseG: CGFloat = 18000 * gravityMultiplier * (5.0 / 8.0)
 
         for _ in 0..<simSteps {
             if let sun = sunNode {
@@ -1261,8 +1275,7 @@ final class GameScene: SKScene {
         missileOwner.setObject(ship.node, forKey: missile)
         missileSpawnTime.setObject(NSNumber(value: CACurrentMediaTime()), forKey: missile)
 
-        let baseLife: TimeInterval = 3.0
-        let life = baseLife * (bulletLifeLong ? 2.0 : 1.0)
+        let life = TimeInterval(bulletLifeSeconds)
         missile.run(.sequence([.wait(forDuration: life), .removeFromParent()]))
 
         if ship === needle {
@@ -2132,20 +2145,43 @@ final class GameScene: SKScene {
         let gravityHeading = makeLabel("Gravity", y: h/2 - 270, name: "env_label_gravity")
         overlay.addChild(gravityHeading)
 
-        let gravLabel = SKLabelNode(text: "Strength")
-        gravLabel.name = "env_label_strength"; gravLabel.fontName = "AvenirNext-Bold"; gravLabel.fontSize = 14
-        gravLabel.fontColor = .white; gravLabel.position = CGPoint(x: 0, y: h/2 - 370); gravLabel.zPosition = 202
-        overlay.addChild(gravLabel); gravityStrengthLabel = gravLabel
+        // Gravity slider
+        let gravTrackY: CGFloat = h/2 - 360
+        let gravTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
+        gravTrack.strokeColor = .white; gravTrack.fillColor = .white
+        gravTrack.position = CGPoint(x: 0, y: gravTrackY)
+        gravTrack.name = "opt_grav_track"; gravTrack.zPosition = 202; overlay.addChild(gravTrack)
+        gravitySliderTrack = gravTrack
 
-        let gravWeak = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        gravWeak.name = "opt_grav_weak"; gravWeak.position = CGPoint(x: -60, y: h/2 - 395)
-        gravWeak.strokeColor = .white; gravWeak.lineWidth = 2; gravWeak.zPosition = 202; overlay.addChild(gravWeak)
-        gravWeak.addChild(makeTabInnerLabel("Weak")); gravityWeakButton = gravWeak
+        // Ticks at 0×, 2.5×, 5× default
+        let gravTickLabels = ["0×", "2.5×", "5×"]
+        for (i, tickLabel) in gravTickLabels.enumerated() {
+            let frac = CGFloat(i) / CGFloat(gravTickLabels.count - 1)
+            let tx = -sliderTrackHalfWidth + frac * sliderTrackWidth
+            let tick = SKShapeNode(rectOf: CGSize(width: 2, height: 8))
+            tick.fillColor = .white; tick.strokeColor = .clear
+            tick.position = CGPoint(x: tx, y: gravTrackY)
+            tick.name = "opt_grav_tick_\(i)"; tick.zPosition = 203; overlay.addChild(tick)
+            let tl = SKLabelNode(text: tickLabel)
+            tl.fontName = "AvenirNext-Medium"; tl.fontSize = 11; tl.fontColor = .white
+            tl.verticalAlignmentMode = .top; tl.horizontalAlignmentMode = .center
+            tl.position = CGPoint(x: tx, y: gravTrackY - 7); tl.zPosition = 203
+            tl.name = "opt_grav_ticklabel_\(i)"; overlay.addChild(tl)
+        }
 
-        let gravStrong = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        gravStrong.name = "opt_grav_strong"; gravStrong.position = CGPoint(x: 60, y: h/2 - 395)
-        gravStrong.strokeColor = .white; gravStrong.lineWidth = 2; gravStrong.zPosition = 202; overlay.addChild(gravStrong)
-        gravStrong.addChild(makeTabInnerLabel("Strong")); gravityStrongButton = gravStrong
+        let gravKnob = SKShapeNode(circleOfRadius: 8)
+        gravKnob.fillColor = .white; gravKnob.strokeColor = .white; gravKnob.lineWidth = 2
+        let gravKnobX = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))
+        gravKnob.position = CGPoint(x: gravKnobX, y: gravTrackY)
+        gravKnob.name = "opt_grav_knob"; gravKnob.zPosition = 204; overlay.addChild(gravKnob)
+        gravitySliderKnob = gravKnob
+
+        let gravValLbl = SKLabelNode(text: gravityLabelText())
+        gravValLbl.fontName = "AvenirNext-Medium"; gravValLbl.fontSize = 12; gravValLbl.fontColor = .white
+        gravValLbl.verticalAlignmentMode = .bottom; gravValLbl.horizontalAlignmentMode = .center
+        gravValLbl.position = CGPoint(x: 0, y: gravTrackY + 12); gravValLbl.zPosition = 203
+        gravValLbl.name = "opt_grav_vallabel"; overlay.addChild(gravValLbl)
+        gravityValueLabel = gravValLbl
 
         let gravityGroupRect = CGRect(x: -130, y: h/2 - 420, width: 260, height: 170)
         let gravityGroup = SKShapeNode(rect: gravityGroupRect, cornerRadius: 8)
@@ -2294,17 +2330,46 @@ final class GameScene: SKScene {
         needleCountLabel.zPosition = 202; overlay.addChild(needleCountLabel)
 
         let lifeLabel = makeLabel("Bullet Life:", y: bulletLifeY, name: "ships_label_bullet_life")
-        overlay.addChild(lifeLabel); bulletLifeLabel = lifeLabel
+        overlay.addChild(lifeLabel)
 
-        let lifeShort = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        lifeShort.name = "opt_bullet_short"; lifeShort.position = CGPoint(x: -60, y: bulletButtonsY)
-        lifeShort.strokeColor = .white; lifeShort.lineWidth = 2; lifeShort.zPosition = 202; overlay.addChild(lifeShort)
-        lifeShort.addChild(makeTabInnerLabel("Short")); bulletLifeShortButton = lifeShort
+        // Bullet-life slider
+        let lifeTrackY: CGFloat = bulletButtonsY
+        let lifeTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
+        lifeTrack.strokeColor = .white; lifeTrack.fillColor = .white
+        lifeTrack.position = CGPoint(x: 0, y: lifeTrackY)
+        lifeTrack.name = "opt_bullet_life_track"; lifeTrack.zPosition = 202; overlay.addChild(lifeTrack)
+        bulletLifeSliderTrack = lifeTrack
 
-        let lifeLong = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        lifeLong.name = "opt_bullet_long"; lifeLong.position = CGPoint(x: 60, y: bulletButtonsY)
-        lifeLong.strokeColor = .white; lifeLong.lineWidth = 2; lifeLong.zPosition = 202; overlay.addChild(lifeLong)
-        lifeLong.addChild(makeTabInnerLabel("Long")); bulletLifeLongButton = lifeLong
+        // Ticks at 0.5×, 1×, 2×, 3× of 3 s default
+        let lifeTickLabels = ["1.5s", "3s", "6s", "9s"]
+        let lifeTickSteps  = [0, 2, 6, 10]
+        for (i, tickLabel) in lifeTickLabels.enumerated() {
+            let frac = CGFloat(lifeTickSteps[i]) / CGFloat(bulletLifeSliderSteps)
+            let tx = -sliderTrackHalfWidth + frac * sliderTrackWidth
+            let tick = SKShapeNode(rectOf: CGSize(width: 2, height: 8))
+            tick.fillColor = .white; tick.strokeColor = .clear
+            tick.position = CGPoint(x: tx, y: lifeTrackY)
+            tick.name = "opt_bullet_life_tick_\(i)"; tick.zPosition = 203; overlay.addChild(tick)
+            let tl = SKLabelNode(text: tickLabel)
+            tl.fontName = "AvenirNext-Medium"; tl.fontSize = 11; tl.fontColor = .white
+            tl.verticalAlignmentMode = .top; tl.horizontalAlignmentMode = .center
+            tl.position = CGPoint(x: tx, y: lifeTrackY - 7); tl.zPosition = 203
+            tl.name = "opt_bullet_life_ticklabel_\(i)"; overlay.addChild(tl)
+        }
+
+        let lifeKnob = SKShapeNode(circleOfRadius: 8)
+        lifeKnob.fillColor = .white; lifeKnob.strokeColor = .white; lifeKnob.lineWidth = 2
+        let lifeKnobX = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
+        lifeKnob.position = CGPoint(x: lifeKnobX, y: lifeTrackY)
+        lifeKnob.name = "opt_bullet_life_knob"; lifeKnob.zPosition = 204; overlay.addChild(lifeKnob)
+        bulletLifeSliderKnob = lifeKnob
+
+        let lifeValLbl = SKLabelNode(text: bulletLifeLabelText())
+        lifeValLbl.fontName = "AvenirNext-Medium"; lifeValLbl.fontSize = 12; lifeValLbl.fontColor = .white
+        lifeValLbl.verticalAlignmentMode = .bottom; lifeValLbl.horizontalAlignmentMode = .center
+        lifeValLbl.position = CGPoint(x: 0, y: lifeTrackY + 12); lifeValLbl.zPosition = 203
+        lifeValLbl.name = "opt_bullet_life_vallabel"; overlay.addChild(lifeValLbl)
+        bulletLifeValueLabel = lifeValLbl
 
         // MARK: Gameplay tab content
         let newMatchBtn = SKShapeNode(rectOf: CGSize(width: 140, height: 36), cornerRadius: 8)
@@ -2400,6 +2465,16 @@ final class GameScene: SKScene {
         return max(0, min(bulletSliderSteps, idx))
     }
 
+    private func gravityLabelText() -> String {
+        if gravitySliderSelection == 0 { return "Off" }
+        let val = gravityMultiplier / 8.0   // ratio relative to original strong default
+        return String(format: "%.1f×", val)
+    }
+
+    private func bulletLifeLabelText() -> String {
+        return String(format: "%.1f s", bulletLifeSeconds)
+    }
+
     private func aiSliderIndexForOverlayX(_ x: CGFloat) -> Int {
         let step = aiIntelligenceTrackWidth / CGFloat(aiIntelligenceSteps)
         let idx = Int(round((x + aiIntelligenceTrackHalfWidth) / step))
@@ -2436,7 +2511,7 @@ final class GameScene: SKScene {
         let gamePrefixes  = ["game_"]
         let envPrefixes   = ["opt_edge_", "opt_sun_toggle", "opt_bullet_grav_toggle",
                              "opt_grav_", "env_label_", "env_gravity_group"]
-        let shipsPrefixes = ["ships_label_", "opt_bullet_short", "opt_bullet_long",
+        let shipsPrefixes = ["ships_label_", "opt_bullet_life_",
                              "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_"]
 
         optionsOverlay?.children.forEach { node in
@@ -2490,14 +2565,26 @@ final class GameScene: SKScene {
         func setEnabled(_ node: SKNode?, enabled: Bool) { node?.alpha = enabled ? 1.0 : 0.5 }
         setEnabled(bulletGravToggleButton, enabled: sunEnabled)
         bulletGravLabel?.alpha = sunEnabled ? 1.0 : 0.5
-        gravityStrengthLabel?.alpha = sunEnabled ? 1.0 : 0.5
-        setEnabled(gravityWeakButton,   enabled: sunEnabled)
-        setEnabled(gravityStrongButton, enabled: sunEnabled)
 
-        styleBtn(gravityWeakButton,      selected: !gravityStrengthStrong)
-        styleBtn(gravityStrongButton,    selected:  gravityStrengthStrong)
-        styleBtn(bulletLifeShortButton,  selected: !bulletLifeLong)
-        styleBtn(bulletLifeLongButton,   selected:  bulletLifeLong)
+        // Gravity slider — dim when sun is off
+        let gravAlpha: CGFloat = sunEnabled ? 1.0 : 0.5
+        gravitySliderTrack?.alpha = gravAlpha
+        gravitySliderKnob?.alpha  = gravAlpha
+        gravityValueLabel?.alpha  = gravAlpha
+        optionsOverlay?.enumerateChildNodes(withName: "opt_grav_tick_*")    { $0.alpha = gravAlpha; _ = $1 }
+        optionsOverlay?.enumerateChildNodes(withName: "opt_grav_ticklabel_*") { $0.alpha = gravAlpha; _ = $1 }
+        if let knob = gravitySliderKnob, let track = gravitySliderTrack {
+            let x = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))
+            knob.position = CGPoint(x: x, y: track.position.y)
+        }
+        gravityValueLabel?.text = gravityLabelText()
+
+        // Bullet-life slider knob
+        if let knob = bulletLifeSliderKnob, let track = bulletLifeSliderTrack {
+            let x = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
+            knob.position = CGPoint(x: x, y: track.position.y)
+        }
+        bulletLifeValueLabel?.text = bulletLifeLabelText()
 
         if let knob = virtualScreenSliderKnob, let track = virtualScreenSliderTrack {
             let x = -sliderTrackHalfWidth + CGFloat(virtualScreenSelection) * (sliderTrackWidth / CGFloat(virtualScreenSteps))
@@ -2647,16 +2734,16 @@ final class GameScene: SKScene {
         for entity in entities { entity.update(deltaTime: dt) }
 
         // FIX #8 — check for deferred respawns (wait until bullet life elapsed since death)
-        let bulletLifeSeconds = 3.0 * (bulletLifeLong ? 2.0 : 1.0)
+        let respawnBulletLife = bulletLifeSeconds
         if needleRespawnScheduled && needle.node.isHidden {
-            if currentTime - needleDestroyTime >= bulletLifeSeconds {
+            if currentTime - needleDestroyTime >= respawnBulletLife {
                 needleRespawnScheduled = false
                 respawnShip(needle)
                 needleVisibleSince = currentTime
             }
         }
         if dartRespawnScheduled && dart.node.isHidden {
-            if currentTime - dartDestroyTime >= bulletLifeSeconds {
+            if currentTime - dartDestroyTime >= respawnBulletLife {
                 dartRespawnScheduled = false
                 respawnShip(dart)
                 dartVisibleSince = currentTime
@@ -2899,7 +2986,10 @@ final class GameScene: SKScene {
                             opponentAngle: needle.node.zRotation,
                             enemyBullets: enemyBullets,
                             sunPosition: sunPos,
-                            edgeBehavior: edgeMode
+                            edgeBehavior: edgeMode,
+                            gravityMultiplier: gravityMultiplier,
+                            bulletLife: bulletLifeSeconds,
+                            opponentBulletsRemaining: needleBulletsRemaining
                         )
 
                         if action.rotate != 0 {
@@ -3311,7 +3401,7 @@ final class GameScene: SKScene {
                 let dy = sun.position.y - ship.node.position.y
                 let r2 = dx*dx + dy*dy + 100
                 let invR = 1.0 / sqrt(r2)
-                let G: CGFloat = 18000 * (gravityStrengthStrong ? 8.0 : 2.0)
+                let G: CGFloat = 18000 * gravityMultiplier
                 let a = G / r2
                 ship.velocity.dx += dx * invR * a * CGFloat(dt)
                 ship.velocity.dy += dy * invR * a * CGFloat(dt)
@@ -3328,7 +3418,7 @@ final class GameScene: SKScene {
                     let dy = sun.position.y - node.position.y
                     let r2 = dx*dx + dy*dy + 100
                     let invR = 1.0 / sqrt(r2)
-                    let G: CGFloat = 18000 * (self.gravityStrengthStrong ? 5.0 : 1.0)
+                    let G: CGFloat = 18000 * self.gravityMultiplier * (5.0 / 8.0)
                     let a = G / r2
                     vx += dx * invR * a * CGFloat(dt); vy += dy * invR * a * CGFloat(dt)
                     node.userData?["vx"] = vx; node.userData?["vy"] = vy
@@ -3436,7 +3526,7 @@ final class GameScene: SKScene {
                         self.enableRandomRespawn = true
                         // FIX #8 — only respawn if enough time has passed for pre-death
                         //          bullets to have expired; otherwise schedule for later.
-                        let bulletLife = 3.0 * (self.bulletLifeLong ? 2.0 : 1.0)
+                        let bulletLife = self.bulletLifeSeconds
                         let destroyTime = (owner === self.needle.node)
                             ? self.needleDestroyTime : self.dartDestroyTime
                         let elapsed = currentTime - destroyTime
@@ -3555,14 +3645,6 @@ final class GameScene: SKScene {
                     sunEnabled.toggle(); applySunState(); refreshOptionsUI(); handled = true
                 } else if let btn = bulletGravToggleButton, btn.contains(locInOverlay), sunEnabled {
                     sunAffectsBullets.toggle(); refreshOptionsUI(); handled = true
-                } else if let btn = gravityWeakButton, btn.contains(locInOverlay), sunEnabled {
-                    gravityStrengthStrong = false; refreshOptionsUI(); handled = true
-                } else if let btn = gravityStrongButton, btn.contains(locInOverlay), sunEnabled {
-                    gravityStrengthStrong = true; refreshOptionsUI(); handled = true
-                } else if let btn = bulletLifeShortButton, btn.contains(locInOverlay) {
-                    bulletLifeLong = false; refreshOptionsUI(); handled = true
-                } else if let btn = bulletLifeLongButton, btn.contains(locInOverlay) {
-                    bulletLifeLong = true; refreshOptionsUI(); handled = true
                 } else if let btn = overlay.childNode(withName: "game_new_match") as? SKShapeNode, btn.contains(locInOverlay) {
                     // Invert button appearance while pressed
                     btn.fillColor = .white; btn.strokeColor = .white
@@ -3571,7 +3653,7 @@ final class GameScene: SKScene {
                     handled = true
                 }
 
-                // FIX #7 — slider taps move one notch in the direction of the tap
+                // Slider taps — move one notch toward tap position; begin drag
                 if !handled && touchIsOnSlider(track: needleBulletSliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .ships {
                     let kx = -sliderTrackHalfWidth + CGFloat(needleBulletLimitSelection) * (sliderTrackWidth / CGFloat(bulletSliderSteps))
                     if locInOverlay.x < kx - 5 {
@@ -3616,6 +3698,22 @@ final class GameScene: SKScene {
                     virtualScreenMode = [.off, .medium][virtualScreenSelection]
                     draggingVirtualScreenSliderTouch = touch
                     applyVirtualScreenMode(); refreshOptionsUI(); handled = true
+                } else if !handled && touchIsOnSlider(track: gravitySliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .environment && sunEnabled {
+                    let kx = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))
+                    if locInOverlay.x < kx - 5 {
+                        gravitySliderSelection = max(0, gravitySliderSelection - 1)
+                    } else if locInOverlay.x > kx + 5 {
+                        gravitySliderSelection = min(gravitySliderSteps, gravitySliderSelection + 1)
+                    }
+                    draggingGravitySliderTouch = touch; refreshOptionsUI(); handled = true
+                } else if !handled && touchIsOnSlider(track: bulletLifeSliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .ships {
+                    let kx = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
+                    if locInOverlay.x < kx - 5 {
+                        bulletLifeSliderSelection = max(0, bulletLifeSliderSelection - 1)
+                    } else if locInOverlay.x > kx + 5 {
+                        bulletLifeSliderSelection = min(bulletLifeSliderSteps, bulletLifeSliderSelection + 1)
+                    }
+                    draggingBulletLifeSliderTouch = touch; refreshOptionsUI(); handled = true
                 }
 
                 if handled { continue }
@@ -3705,6 +3803,18 @@ final class GameScene: SKScene {
                     }
                     continue
                 }
+                if draggingGravitySliderTouch == touch {
+                    let step = sliderTrackWidth / CGFloat(gravitySliderSteps)
+                    let idx = max(0, min(gravitySliderSteps, Int(round((locInOverlay.x + sliderTrackHalfWidth) / step))))
+                    if gravitySliderSelection != idx { gravitySliderSelection = idx; refreshOptionsUI() }
+                    continue
+                }
+                if draggingBulletLifeSliderTouch == touch {
+                    let step = sliderTrackWidth / CGFloat(bulletLifeSliderSteps)
+                    let idx = max(0, min(bulletLifeSliderSteps, Int(round((locInOverlay.x + sliderTrackHalfWidth) / step))))
+                    if bulletLifeSliderSelection != idx { bulletLifeSliderSelection = idx; refreshOptionsUI() }
+                    continue
+                }
             }
 
             let location = touch.location(in: self)
@@ -3760,7 +3870,8 @@ final class GameScene: SKScene {
             if draggingNeedleAISliderTouch == touch { draggingNeedleAISliderTouch = nil }
             if draggingWedgeAISliderTouch  == touch { draggingWedgeAISliderTouch  = nil }
             if draggingVirtualScreenSliderTouch == touch { draggingVirtualScreenSliderTouch = nil }
-
+            if draggingGravitySliderTouch   == touch { draggingGravitySliderTouch   = nil }
+            if draggingBulletLifeSliderTouch == touch { draggingBulletLifeSliderTouch = nil }
             // New Match button: restore appearance, fire action
             if newMatchButtonTouch == touch {
                 newMatchButtonTouch = nil
@@ -3807,6 +3918,8 @@ final class GameScene: SKScene {
             if draggingNeedleAISliderTouch == touch { draggingNeedleAISliderTouch = nil }
             if draggingWedgeAISliderTouch  == touch { draggingWedgeAISliderTouch  = nil }
             if draggingVirtualScreenSliderTouch == touch { draggingVirtualScreenSliderTouch = nil }
+            if draggingGravitySliderTouch   == touch { draggingGravitySliderTouch   = nil }
+            if draggingBulletLifeSliderTouch == touch { draggingBulletLifeSliderTouch = nil }
             if newMatchButtonTouch == touch { newMatchButtonTouch = nil; restoreNewMatchButton() }
             fireTouches.removeValue(forKey: ObjectIdentifier(touch))
             activeAimTouches.remove(touch)
