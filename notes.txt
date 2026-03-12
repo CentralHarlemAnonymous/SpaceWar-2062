@@ -91,9 +91,3 @@ the current code seems to control only the ship on the left. BOTH ships should t
 
 Missiles should fire in a straight line directly from the head of each ship in the direction the ship is facing at the moment the button was pressed.
 
-Make the missiles smaller.
-
-for the sake of debugging only, place a red dot at the head of each ship, the point opposite the engines. This wil be the point from which the missiles emerge.
-
-the direction of fire of the missiles is not correct. Perhaps draw a thin line from the front of each ship, showing for debugging purposes what the app thinks of as a the direction of fire. In each case, it should be the line bisecting the ship, passing through the firing point.
-the bullet directions are still wrong, and the ships are not turning to the most recent touch point. They should continue to turn until either they are both pointing towards the touchpoint or until the press ends.

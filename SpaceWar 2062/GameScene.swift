@@ -94,13 +94,17 @@ final class GameScene: SKScene {
     private var optionsVisible: Bool = false
     private var optionsDimmer: SKShapeNode?
 
-    private enum OptionsTab { case game, environment, ships, about }
+    private enum OptionsTab { case game, environment, ships, about, shipSelection, network }
     private var currentOptionsTab: OptionsTab = .environment
 
     private var gameTabButton: SKShapeNode?
     private var optionsTabButton: SKShapeNode?
     private var shipsTabButton: SKShapeNode?
     private var aboutTabButton: SKShapeNode?
+    private var shipSelectionTabButton: SKShapeNode?
+    private var networkTabButton: SKShapeNode?
+    private var shipSelectionContainer: SKNode?
+    private var networkContainer: SKNode?
     private var aboutContainer: SKNode?
 
     // Needle AI
@@ -144,6 +148,15 @@ final class GameScene: SKScene {
     private var driftDartTargetAngle: CGFloat = 0
     private var driftNeedleNextTurn: TimeInterval = 0
     private var driftDartNextTurn: TimeInterval = 0
+
+    // AI intelligence assigned randomly when each ship respawns during game-over mode (0–2)
+    private var gameOverNeedleAILevel: Int = 0
+    private var gameOverDartAILevel:   Int = 0
+
+    // Camera switching during game-over exhibition
+    private var gameOverFollowedShip: Ship?       // nil until game-over starts
+    private var gameOverLastSwitchTime: TimeInterval = 0
+    private var gameOverAnimationStartTime: TimeInterval = 0  // when AI/shooting begins (5s after game ends)
 
     private var gameOverLabelNode: SKNode?
 
@@ -238,6 +251,7 @@ final class GameScene: SKScene {
     private let virtualScreenSteps: Int = 1
     private var virtualScreenSliderTrack: SKShapeNode?
     private var virtualScreenSliderKnob: SKShapeNode?
+    private var savedVirtualScreenSelection: Int = 0   // player's choice, preserved across game-over
     private var virtualWorldWidth: CGFloat {
         switch virtualScreenMode {
         case .off:    return size.width
@@ -276,6 +290,8 @@ final class GameScene: SKScene {
     private var needleDirectionArrow: SKShapeNode?
     private var dartDirectionArrow:   SKShapeNode?
     private var sunDirectionArrow:    SKShapeNode?   // always points to virtual world centre
+    private var needleDistanceLabel:  SKLabelNode?   // distance readout beside needle edge arrow
+    private var dartDistanceLabel:    SKLabelNode?   // distance readout beside dart edge arrow
 
     // Cluster title labels
     private var rightClusterTitle: SKLabelNode?
@@ -374,9 +390,8 @@ final class GameScene: SKScene {
         if let fire = fireThrustButton {
             fire.position = CGPoint(x: s.width - buttonRadius - 20, y: bottomY)
             if let rightThrust = rightThrustButton {
-                let innerRightRadius = buttonRadius * 0.6
                 let rightPadding: CGFloat = 12
-                rightThrust.position = CGPoint(x: fire.position.x - (buttonRadius + innerRightRadius + rightPadding), y: bottomY)
+                rightThrust.position = CGPoint(x: fire.position.x - (buttonRadius * 2 + rightPadding), y: bottomY)
             }
             if let counter = dartBulletCounterNode {
                 counter.position = CGPoint(x: fire.position.x, y: fire.position.y + buttonRadius + 20)
@@ -392,9 +407,8 @@ final class GameScene: SKScene {
             let leftButtonRadius: CGFloat = 40
             leftFire.position = CGPoint(x: leftButtonRadius + 20, y: bottomY)
             if let leftThrust = leftThrustButton {
-                let innerLeftRadius = leftButtonRadius * 0.6
                 let leftPadding: CGFloat = 12
-                leftThrust.position = CGPoint(x: leftFire.position.x + (leftButtonRadius + innerLeftRadius + leftPadding), y: bottomY)
+                leftThrust.position = CGPoint(x: leftFire.position.x + (leftButtonRadius * 2 + leftPadding), y: bottomY)
             }
             if let needleCounter = needleBulletCounterNode {
                 needleCounter.position = CGPoint(x: leftFire.position.x, y: leftFire.position.y + leftButtonRadius + 20)
@@ -411,11 +425,6 @@ final class GameScene: SKScene {
         dartScoreNode?.position = CGPoint(x: s.width - 24, y: topY)
         optionsButton?.position = CGPoint(x: s.width / 2, y: topY)
         optionsOverlay?.position = CGPoint(x: s.width / 2, y: s.height / 2)
-
-        if let dimmer = optionsDimmer {
-            dimmer.path = CGPath(rect: CGRect(x: -s.width/2, y: -s.height/2, width: s.width, height: s.height), transform: nil)
-            dimmer.position = CGPoint(x: s.width/2, y: s.height/2)
-        }
 
         sunNode?.position = CGPoint(x: virtualWorldWidth / 2, y: virtualWorldHeight / 2)
     }
@@ -501,19 +510,28 @@ final class GameScene: SKScene {
         rightFireLabel.alpha = 0.9
         fireThrustButton.addChild(rightFireLabel)
 
-        // Right thrust button
-        let innerRightRadius = buttonRadius * 0.6
-        rightThrustButton = SKShapeNode(circleOfRadius: innerRightRadius)
+        // Right thrust button — same radius as fire button
         let rightPadding: CGFloat = 12
+        rightThrustButton = SKShapeNode(circleOfRadius: buttonRadius)
         rightThrustButton.position = CGPoint(
-            x: fireThrustButton.position.x - (buttonRadius + innerRightRadius + rightPadding),
+            x: fireThrustButton.position.x - (buttonRadius * 2 + rightPadding),
             y: fireThrustButton.position.y
         )
         rightThrustButton.strokeColor = .white
-        rightThrustButton.lineWidth = 2
+        rightThrustButton.lineWidth = 3
         rightThrustButton.fillColor = fireThrustButton.fillColor
         rightThrustButton.zPosition = fireThrustButton.zPosition + 1
         addChild(rightThrustButton)
+
+        let rightThrustLabel = SKLabelNode(text: "THRUST")
+        rightThrustLabel.fontName = "AvenirNext-Bold"
+        rightThrustLabel.fontSize = 14
+        rightThrustLabel.fontColor = .white
+        rightThrustLabel.verticalAlignmentMode = .center
+        rightThrustLabel.horizontalAlignmentMode = .center
+        rightThrustLabel.zPosition = 11
+        rightThrustLabel.alpha = 0.9
+        rightThrustButton.addChild(rightThrustLabel)
 
         let rightCluster = SKLabelNode(text: "WEDGE")
         rightCluster.fontName = "AvenirNext-Bold"
@@ -576,14 +594,14 @@ final class GameScene: SKScene {
         optionsOverlay?.isHidden = true
 
         if optionsDimmer == nil {
-            let dimmer = SKShapeNode(rectOf: CGSize(width: max(size.width, 1), height: max(size.height, 1)))
-            dimmer.position = CGPoint(x: size.width/2, y: size.height/2)
-            dimmer.fillColor = SKColor(white: 0.0, alpha: 0.8)
+            let dimmer = SKShapeNode()   // sized in setupOptionsOverlay when w/h are known
+            dimmer.fillColor = SKColor(white: 0.0, alpha: 1.0)
             dimmer.strokeColor = .clear
-            dimmer.zPosition = 199
+            dimmer.zPosition = 200   // just behind bg (bg is 201)
             dimmer.isHidden = true
-            addChild(dimmer)
+            dimmer.name = "options_dimmer"
             self.optionsDimmer = dimmer
+            // dimmer is added as a child of optionsOverlay in setupOptionsOverlay
         }
 
         // Bullet counter over right fire button
@@ -620,18 +638,27 @@ final class GameScene: SKScene {
         addChild(needleCounter)
         self.needleBulletCounterNode = needleCounter
 
-        let innerLeftRadius = leftButtonRadius * 0.6
-        leftThrustButton = SKShapeNode(circleOfRadius: innerLeftRadius)
         let leftPadding: CGFloat = 12
+        leftThrustButton = SKShapeNode(circleOfRadius: leftButtonRadius)
         leftThrustButton.position = CGPoint(
-            x: leftFireButton.position.x + (leftButtonRadius + innerLeftRadius + leftPadding),
+            x: leftFireButton.position.x + (leftButtonRadius * 2 + leftPadding),
             y: leftFireButton.position.y
         )
         leftThrustButton.strokeColor = .white
-        leftThrustButton.lineWidth = 2
+        leftThrustButton.lineWidth = 3
         leftThrustButton.fillColor = leftFireButton.fillColor
         leftThrustButton.zPosition = leftFireButton.zPosition + 1
         addChild(leftThrustButton)
+
+        let leftThrustLabel = SKLabelNode(text: "THRUST")
+        leftThrustLabel.fontName = "AvenirNext-Bold"
+        leftThrustLabel.fontSize = 14
+        leftThrustLabel.fontColor = .white
+        leftThrustLabel.verticalAlignmentMode = .center
+        leftThrustLabel.horizontalAlignmentMode = .center
+        leftThrustLabel.zPosition = 11
+        leftThrustLabel.alpha = 0.9
+        leftThrustButton.addChild(leftThrustLabel)
 
         let leftCluster = SKLabelNode(text: "NEEDLE")
         leftCluster.fontName = "AvenirNext-Bold"
@@ -833,9 +860,6 @@ final class GameScene: SKScene {
         var bvx = -bulletSpeed * sin(angle), bvy = bulletSpeed * cos(angle)
         let simStep: CGFloat = 0.05
         let fullLife: CGFloat = bulletLifeSeconds
-        // Only simulate until bullet reaches the opponent (plus a small buffer).
-        // Simulating beyond impact distance causes false positives where the bullet
-        // curves into the sun long after it would have already hit or missed.
         let simLife: CGFloat
         if let t = target {
             let toDist = hypot(t.node.position.x - bx, t.node.position.y - by)
@@ -911,14 +935,6 @@ final class GameScene: SKScene {
         return predicted
     }
 
-    /// Simulates all missiles forward and checks whether any will pass within
-    /// the danger radius.  FIX #10 — larger radius (200), longer look-ahead (2s).
-    /// Also checks opponent ship proximity as a collision-avoidance threat.
-    /// Returns whether any bullet has a predicted minimum separation < hitRadius
-    /// within `horizon` seconds — i.e. the hit is unavoidable and the ship should
-    /// stop evading and try to kill the opponent instead.
-    /// Returns true if the ship is on a collision course with the opponent and should brake.
-    /// Hunt mode is now handled separately (see huntingUnarmed flags in update).
     private func collisionDecision(ship: Ship, opponent: Ship,
                                    killTime: TimeInterval, currentTime: TimeInterval) -> Bool {
         let speed = hypot(ship.velocity.dx, ship.velocity.dy)
@@ -942,15 +958,6 @@ final class GameScene: SKScene {
         return ttca < 3.0 && minSep < 90
     }
 
-    /// Returns the best heading target for collision avoidance with `opponent`.
-    /// Evaluates retrograde (kill own speed) and both perpendiculars to the
-    /// opponent's velocity vector (cross their path), then picks whichever
-    /// requires the least rotation from the current heading — minimising the
-    /// time to point away from the collision.
-    /// Aim point for hunt mode (opponent unarmed).
-    /// Close range (≤150px): current position — no lead needed, bullet arrives fast.
-    /// Long range (≥300px): level3AimPoint — opponent will have moved significantly.
-    /// Mid range: linear blend between the two.
     private func huntAimPoint(shooter: Ship, target: Ship) -> CGPoint {
         let myPos = shooter.node.position
         let oppPos = (edgeBehavior == .wrap)
@@ -962,7 +969,7 @@ final class GameScene: SKScene {
         if dist <= closeThreshold { return oppPos }
         let intercept = level3AimPoint(shooter: shooter, target: target)
         if dist >= farThreshold   { return intercept }
-        let t = (dist - closeThreshold) / (farThreshold - closeThreshold)  // 0…1
+        let t = (dist - closeThreshold) / (farThreshold - closeThreshold)
         return CGPoint(x: oppPos.x + t * (intercept.x - oppPos.x),
                        y: oppPos.y + t * (intercept.y - oppPos.y))
     }
@@ -973,11 +980,9 @@ final class GameScene: SKScene {
         let oppVel = opponent.velocity
         let oppSpeed = hypot(oppVel.dx, oppVel.dy)
 
-        // Retrograde: point opposite own velocity
         let retrograde = CGPoint(x: myPos.x - myVel.dx, y: myPos.y - myVel.dy)
         guard oppSpeed > 20 else { return retrograde }
 
-        // Two perpendiculars to the opponent's travel vector
         let invSpd = 1.0 / oppSpeed
         let perpX = -oppVel.dy * invSpd
         let perpY =  oppVel.dx * invSpd
@@ -995,9 +1000,6 @@ final class GameScene: SKScene {
         return retrograde
     }
 
-    /// Returns true if `shooter` already has a bullet in flight that will come
-    /// within `hitRadius` of `target`.  Used to suppress additional shots when
-    /// a hit is already certain — prevents burst-firing on a single target.
     private func ownBulletWillHit(shooter: Ship, target: Ship, hitRadius: CGFloat = 18) -> Bool {
         var found = false
         enumerateChildNodes(withName: "missile") { node, _ in
@@ -1037,10 +1039,6 @@ final class GameScene: SKScene {
         return found
     }
 
-    /// Simulates a bullet fired from `shooter` at its current rotation and
-    /// returns true if it will come within `hitRadius` of `target` before
-    /// expiring or hitting the sun.  Used for the per-frame certainty-fire
-    /// check — only call when the AI is otherwise eligible to fire.
     private func bulletWillHit(shooter: Ship, target: Ship, hitRadius: CGFloat = 18) -> Bool {
         let angle = shooter.node.zRotation
         let bulletSpeed: CGFloat = 480
@@ -1081,30 +1079,24 @@ final class GameScene: SKScene {
                   let data = node.userData,
                   let vx = data["vx"] as? CGFloat,
                   let vy = data["vy"] as? CGFloat else { return }
-            // Relative position and velocity (bullet relative to ship)
             let rdx = node.position.x - ship.node.position.x
             let rdy = node.position.y - ship.node.position.y
             let rvx = vx - ship.velocity.dx
             let rvy = vy - ship.velocity.dy
             let rvMag = hypot(rvx, rvy)
             guard rvMag > 1 else { return }
-            // Time to closest approach
             let ttca = max(0, -(rdx * rvx + rdy * rvy) / (rvMag * rvMag))
             guard ttca < horizon else { return }
-            // Minimum separation (perpendicular distance)
             let minSep = abs(rdx * rvy - rdy * rvx) / rvMag
-            if minSep < 15 { found = true }   // 15px ≈ ship collision radius
+            if minSep < 15 { found = true }
         }
         return found
     }
 
-    /// Bullet danger using predicted-closest-approach with relative velocity so the
-    /// ship's own motion is accounted for: fleeing ships ignore distant stale threats,
-    /// and ships moving into a bullet's path trigger evasion early.
     private func edgeAwareBulletDanger(for ship: Ship,
                                         opponent: Ship? = nil,
                                         lookAhead: CGFloat = 2.5) -> (danger: Bool, awayPoint: CGPoint) {
-        let dangerMinSep: CGFloat = 80   // evasion radius (predicted perpendicular miss distance)
+        let dangerMinSep: CGFloat = 80
         var worstMinSep = CGFloat.greatestFiniteMagnitude
         var worstClosestPos = CGPoint.zero
 
@@ -1113,32 +1105,23 @@ final class GameScene: SKScene {
                   let vx = data["vx"] as? CGFloat,
                   let vy = data["vy"] as? CGFloat else { return }
 
-            // Relative position (bullet minus ship)
             let rdx = node.position.x - ship.node.position.x
             let rdy = node.position.y - ship.node.position.y
-            // Relative velocity (bullet minus ship) — key: accounts for ship motion
             let rvx = vx - ship.velocity.dx
             let rvy = vy - ship.velocity.dy
             let rvMag = hypot(rvx, rvy)
             guard rvMag > 1 else { return }
 
-            // Time to closest approach, clamped to look-ahead window
             let ttca = max(0, min(lookAhead, -(rdx * rvx + rdy * rvy) / (rvMag * rvMag)))
-
-            // Minimum perpendicular separation between trajectories
             let minSep = abs(rdx * rvy - rdy * rvx) / rvMag
-
-            // Bullet world position at closest approach (for away-point direction)
             let closestPos = CGPoint(x: node.position.x + vx * ttca,
                                      y: node.position.y + vy * ttca)
 
             if minSep < dangerMinSep && ttca < lookAhead {
-                // Track the most dangerous (smallest minSep) bullet
                 if minSep < worstMinSep { worstMinSep = minSep; worstClosestPos = closestPos }
             }
         }
 
-        // Also treat a close opponent ship as a collision danger
         if let opp = opponent, !opp.node.isHidden {
             let oppPos = (edgeBehavior == .wrap)
                 ? nearestVirtualPosition(of: opp.node.position, from: ship.node.position)
@@ -1148,7 +1131,6 @@ final class GameScene: SKScene {
             let dist = hypot(odx, ody)
             let shipDangerRadius: CGFloat = 110
             if dist < shipDangerRadius {
-                // Convert to equivalent "minSep" for comparison; use dist as proxy
                 if dist < worstMinSep { worstMinSep = dist; worstClosestPos = oppPos }
             }
         }
@@ -1162,11 +1144,6 @@ final class GameScene: SKScene {
         return (false, .zero)
     }
 
-    /// Returns a strategic position target for `ship` fighting `opponent`.
-    /// When `pursueBehind` is true (opponent still has bullets), the out-of-range
-    /// waypoint is placed 280px behind the opponent along their velocity vector so
-    /// the AI approaches from their blind spot.  When false (opponent unarmed) the
-    /// perpendicular orbit is used instead (already moot — hunt mode handles unarmed).
     private func strategicPositionTarget(for ship: Ship, opponent: Ship,
                                          pursueBehind: Bool = false) -> CGPoint {
         guard !opponent.node.isHidden else {
@@ -1183,14 +1160,12 @@ final class GameScene: SKScene {
         let dist = hypot(dx, dy)
         let idealRange: CGFloat = 260
 
-        if abs(dist - idealRange) < 240 {    // 150–500px: aim at opponent directly
+        if abs(dist - idealRange) < 240 {
             return level3AimPoint(shooter: ship, target: opponent)
         }
 
         let oppSpeed = hypot(opponent.velocity.dx, opponent.velocity.dy)
 
-        // When pursuing from behind, navigate to a point 280px behind the opponent
-        // along their velocity vector — their blind spot with lowest relative velocity.
         if pursueBehind && oppSpeed > 10 {
             let invSpd = 1.0 / oppSpeed
             let behindX = oppPos.x - opponent.velocity.dx * invSpd * 280
@@ -1200,7 +1175,6 @@ final class GameScene: SKScene {
                            y: max(m, min(virtualWorldHeight - m, behindY)))
         }
 
-        // Default: orbit to a perpendicular position (or direct approach if stationary)
         let perpX: CGFloat
         let perpY: CGFloat
         if oppSpeed > 10 {
@@ -1246,7 +1220,6 @@ final class GameScene: SKScene {
 
     private func fireMissile(from ship: Ship, muzzleOffset: CGPoint) {
         if ship.node.isHidden { return }
-        if gameOver { return }
 
         if ship === needle {
             if needleBulletsRemaining == 0 { return }
@@ -1300,7 +1273,6 @@ final class GameScene: SKScene {
         if ship === needle { needleDestroyTime = now }
         else               { dartDestroyTime   = now }
 
-        // Pre-compute where the ship will respawn so the camera can start tracking there
         let respawnPos = (enableRandomRespawn ? safeRandomPosition(avoiding: ship) : nil)
                          ?? ship.spawnPosition
         let panDelay: TimeInterval = virtualScreenMode != .off ? 2.0 : 1.0
@@ -1314,8 +1286,38 @@ final class GameScene: SKScene {
 
         ship.node.isHidden = true
         ship.velocity = .zero
+
+        // In game-over mode each respawn gets a fresh random AI level (0=basic, 1=predictive, 2=expert)
+        if gameOver {
+            if ship === needle { gameOverNeedleAILevel = Int.random(in: 0...2) }
+            else               { gameOverDartAILevel   = Int.random(in: 0...2) }
+
+            // Switch camera to the surviving ship, unless both exploded within 2 seconds
+            let survivor = (ship === needle) ? dart : needle
+            if now - gameOverLastSwitchTime > 2.0 {
+                gameOverFollowedShip = survivor
+                gameOverLastSwitchTime = now
+            }
+        }
+
         guard let path = ship.node.path else { return }
-        let pieces = explodePath(path: path, from: ship)
+
+        // Build wreck pieces from the ship's stroke path
+        var pieces = explodePath(path: path, from: ship)
+
+        // PATCH 2 — The needle's head dot (white ball at the tip) flies off as debris
+        if ship === needle {
+            let ang = ship.node.zRotation
+            let offsetY: CGFloat = 21          // matches needleHeadDot y position
+            let ballPiece = SKShapeNode(circleOfRadius: 8)
+            ballPiece.fillColor = .white; ballPiece.strokeColor = .clear
+            ballPiece.position = CGPoint(
+                x: ship.node.position.x - offsetY * sin(ang),
+                y: ship.node.position.y + offsetY * cos(ang))
+            ballPiece.zPosition = ship.node.zPosition
+            pieces.append(ballPiece)
+        }
+
         let lifetime: CGFloat = 2.6
         let ownerNode = ship.node
         wreckPieceCount.setObject(NSNumber(value: pieces.count), forKey: ownerNode)
@@ -1368,6 +1370,8 @@ final class GameScene: SKScene {
     }
 
     private func startNewMatch() {
+        // Preserve the current virtual screen setting before anything is reset
+        savedVirtualScreenSelection = virtualScreenSelection
         needleScore = 0; dartScore = 0
         updateScoreDisplays()
         enableRandomRespawn = false
@@ -1386,9 +1390,17 @@ final class GameScene: SKScene {
         enumerateChildNodes(withName: "missile") { n, _ in n.removeFromParent() }
         enumerateChildNodes(withName: "wreckPiece") { n, _ in n.removeFromParent() }
         gameOver = false
+        gameOverFollowedShip = nil
+        gameOverLastSwitchTime = 0
+        gameOverAnimationStartTime = 0
         victorLabelNode?.removeFromParent(); victorLabelNode = nil
         gameOverLabelNode?.removeFromParent(); gameOverLabelNode = nil
-        // Restore button visibility (respects AI-enabled state)
+        // Restore the player's virtual screen preference that was saved at game-over time
+        if virtualScreenSelection != savedVirtualScreenSelection {
+            virtualScreenSelection = savedVirtualScreenSelection
+            virtualScreenMode = virtualScreenSelection == 0 ? .off : .medium
+            applyVirtualScreenMode()
+        }
         updateNeedleControlsVisibility()
         updateWedgeControlsVisibility()
         if virtualScreenMode != .off {
@@ -1453,12 +1465,11 @@ final class GameScene: SKScene {
 
     // MARK: - Bullet counts
 
-    /// FIX #5 — bullet choices: 10 / 50 / ∞
     private func bulletsForSelection(_ sel: Int) -> Int? {
         switch sel {
         case 0: return 10
         case 1: return 50
-        default: return nil   // infinite
+        default: return nil
         }
     }
 
@@ -1473,22 +1484,52 @@ final class GameScene: SKScene {
         refreshBulletCounters()
     }
 
-    private func makeInfinityNode() -> SKNode {
+    private func makeVectorInfinityNode(scale: CGFloat) -> SKNode {
+        // Lemniscate drawn in a 20×10 native space — much larger than the 8×12 glyph cell
+        // so it stays legible at small scales. Crosses at centre (10,5); right lobe clockwise,
+        // left lobe counter-clockwise so the path genuinely intersects at the midpoint.
+        let cx: CGFloat = 10, cy: CGFloat = 5
+        let hw: CGFloat = 8.0, hh: CGFloat = 3.5
         let path = CGMutablePath()
-        let r: CGFloat = 4, gap: CGFloat = 2
-        path.addEllipse(in: CGRect(x: -(r*2+gap), y: -r, width: r*2, height: r*2))
-        path.addEllipse(in: CGRect(x: gap, y: -r, width: r*2, height: r*2))
+        path.move(to: CGPoint(x: cx, y: cy))
+        path.addCurve(to: CGPoint(x: cx + hw, y: cy),
+                      control1: CGPoint(x: cx + hw * 0.45, y: cy + hh),
+                      control2: CGPoint(x: cx + hw,        y: cy + hh))
+        path.addCurve(to: CGPoint(x: cx, y: cy),
+                      control1: CGPoint(x: cx + hw,        y: cy - hh),
+                      control2: CGPoint(x: cx + hw * 0.45, y: cy - hh))
+        path.addCurve(to: CGPoint(x: cx - hw, y: cy),
+                      control1: CGPoint(x: cx - hw * 0.45, y: cy - hh),
+                      control2: CGPoint(x: cx - hw,        y: cy - hh))
+        path.addCurve(to: CGPoint(x: cx, y: cy),
+                      control1: CGPoint(x: cx - hw,        y: cy + hh),
+                      control2: CGPoint(x: cx - hw * 0.45, y: cy + hh))
         let node = SKShapeNode(path: path)
         node.strokeColor = .white; node.fillColor = .clear
-        node.lineWidth = 1.5; node.glowWidth = 2
+        node.lineWidth = 1.0; node.glowWidth = 4.0; node.alpha = 1.0
+        node.lineCap = .round
+        node.setScale(scale)
         return node
     }
 
+    private func makeInfinityNode() -> SKNode { makeVectorInfinityNode(scale: 0.85) }
+
     private func refreshBulletCounters() {
+        let bulletScale: CGFloat = 0.85
+        let bulletSpacing: CGFloat = 3
         func setCounter(_ node: SKNode?, count: Int) {
             guard let node else { return }
             node.removeAllChildren()
-            let content: SKNode = (count == Int.max) ? makeInfinityNode() : makeScoreNode(score: count, scale: 0.8, spacing: 10)
+            let content: SKNode
+            if count == Int.max {
+                content = makeVectorInfinityNode(scale: bulletScale)
+                // Centre: native space is 20×10, so offset by half at scale
+                content.position = CGPoint(x: -10 * bulletScale, y: -5 * bulletScale)
+            } else {
+                content = makeVectorWordNode("\(count)", scale: bulletScale, spacing: bulletSpacing, bright: true)
+                let w = vectorWordWidth("\(count)", scale: bulletScale, spacing: bulletSpacing)
+                content.position = CGPoint(x: -w / 2, y: -6 * bulletScale)
+            }
             node.addChild(content)
         }
         setCounter(dartBulletCounterNode, count: dartBulletsRemaining)
@@ -1505,7 +1546,25 @@ final class GameScene: SKScene {
         gameOver = true
         isThrustingDart = false; isThrustingNeedle = false
 
+        // Assign initial random AI levels for the game-over exhibition mode
+        gameOverNeedleAILevel = Int.random(in: 0...2)
+        gameOverDartAILevel   = Int.random(in: 0...2)
+
+        // Start the camera on whichever ship is alive; default to dart
+        gameOverFollowedShip = (!dart.node.isHidden) ? dart : needle
+        gameOverLastSwitchTime = 0
+
+        // Give both ships unlimited ammo so they keep firing indefinitely
+        needleBulletsRemaining = Int.max
+        dartBulletsRemaining   = Int.max
+        refreshBulletCounters()
+
+        // Save the player's virtual screen preference; the 3000×3000 switch is deferred to animation start
+        savedVirtualScreenSelection = virtualScreenSelection
+
         let now = CACurrentMediaTime()
+        gameOverAnimationStartTime = now + 5.0
+
         driftNeedleThrustOn = true; driftDartThrustOn = true
         driftNeedleNextToggle = now + Double.random(in: 0.4...1.0)
         driftDartNextToggle   = now + Double.random(in: 0.4...1.0)
@@ -1515,7 +1574,6 @@ final class GameScene: SKScene {
         driftDartNextTurn   = now + Double.random(in: 0.8...2.0)
 
         showVictorLabel(); showGameOverLabel()
-        // Hide gameplay buttons during game-over screen
         fireThrustButton?.isHidden  = true
         rightThrustButton?.isHidden = true
         #if DEBUG
@@ -1532,31 +1590,29 @@ final class GameScene: SKScene {
 
     private func showVictorLabel() {
         victorLabelNode?.removeFromParent()
-        // Attach to cameraNode so it stays fixed on screen regardless of camera movement.
-        // In camera-local space the screen centre is (0,0); top-left is (-sw/2, sh/2).
         let sh = size.height, sw = size.width
         let safeTop = safeAreaTopInset
-        // Score nodes sit at topY. Place winner text ~40pt below that.
         let labelY = sh/2 - 30 - safeTop - 42
         let needleCX = -sw/2 + 24
         let dartCX   =  sw/2 - 24
         let container = SKNode(); container.zPosition = 80
         cameraNode.addChild(container); victorLabelNode = container
+        // Use the same dim, no-glow vector style as GAME OVER — bright:false keeps strokes
+        // thin and unlit, which is what makes the vector font look authentically retro.
+        let scale: CGFloat = 1.2; let spacing: CGFloat = 5
         if needleScore == dartScore {
             for (text, cx) in [("TIE", needleCX), ("TIE", dartCX)] {
-                let w = vectorWordWidth(text, scale: 1.0, spacing: 4)
-                let node = makeVectorWordNode(text, scale: 1.0, spacing: 4, bright: true)
+                let w = vectorWordWidth(text, scale: scale, spacing: spacing)
+                let node = makeVectorWordNode(text, scale: scale, spacing: spacing)
                 node.position = CGPoint(x: cx - w/2, y: labelY); container.addChild(node)
             }
         } else {
-            let w = vectorWordWidth("WINNER", scale: 1.0, spacing: 4)
-            let word = makeVectorWordNode("WINNER", scale: 1.0, spacing: 4, bright: true)
-            // Under needle score: left-align from left edge + safe inset
-            // Under dart score:   right-align to right edge - safe inset
-            let edgeInset: CGFloat = 12   // enough to keep glow off the edge
+            let w = vectorWordWidth("WINNER", scale: scale, spacing: spacing)
+            let word = makeVectorWordNode("WINNER", scale: scale, spacing: spacing)
+            let edgeInset: CGFloat = 12
             let startX: CGFloat = needleScore > dartScore
-                ? -sw/2 + edgeInset          // needle side: flush left with inset
-                : sw/2 - edgeInset - w       // dart side:   flush right with inset
+                ? -sw/2 + edgeInset
+                : sw/2 - edgeInset - w
             word.position = CGPoint(x: startX, y: labelY); container.addChild(word)
         }
     }
@@ -1567,7 +1623,6 @@ final class GameScene: SKScene {
         let phrase = makeVectorWordNode(text, scale: scale, spacing: spacing)
         phrase.zPosition = 80
         let w = vectorWordWidth(text, scale: scale, spacing: spacing)
-        // Centre on screen (camera-local space)
         phrase.position = CGPoint(x: -w/2, y: size.height / 6)
         cameraNode.addChild(phrase); gameOverLabelNode = phrase
     }
@@ -1580,6 +1635,16 @@ final class GameScene: SKScene {
         let dotAlpha: CGFloat = bright ? 1.0 : 0.7
         let segGlow: CGFloat  = bright ? 4.0 : 0.0
         let glyphs: [Character: [(CGFloat,CGFloat,CGFloat,CGFloat)]] = [
+            "0": [(0,2,0,10),(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2)],
+            "1": [(2,10,4,12),(4,12,4,0),(0,0,8,0)],
+            "2": [(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,0,0),(0,0,8,0)],
+            "3": [(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,6,6),(2,6,6,6),(6,6,8,5),(8,5,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2)],
+            "4": [(0,12,0,6),(0,6,8,6),(6,12,6,0)],
+            "5": [(8,12,0,12),(0,12,0,7),(0,7,6,7),(6,7,8,5),(8,5,8,2),(8,2,6,0),(6,0,0,0)],
+            "6": [(8,10,6,12),(6,12,2,12),(2,12,0,10),(0,10,0,2),(0,2,2,0),(2,0,6,0),(6,0,8,2),(8,2,8,5),(8,5,0,5)],
+            "7": [(0,12,8,12),(8,12,4,0)],
+            "8": [(2,6,0,8),(0,8,0,10),(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,8),(8,8,6,6),(6,6,2,6),(2,6,0,4),(0,4,0,2),(0,2,2,0),(2,0,6,0),(6,0,8,2),(8,2,8,4),(8,4,6,6)],
+            "9": [(8,2,6,0),(6,0,2,0),(2,0,0,2),(0,2,0,5),(0,5,8,5),(8,5,8,10),(8,10,6,12),(6,12,2,12),(2,12,0,10)],
             "A": [(0,0,2,6),(2,6,4,12),(8,0,6,6),(6,6,4,12),(2,6,6,6)],
             "B": [(0,0,0,12),(0,12,5,12),(5,12,7,10),(7,10,7,7),(7,7,5,6),(5,6,0,6),
                   (0,6,5,6),(5,6,7,4),(7,4,7,1),(7,1,5,0),(5,0,0,0)],
@@ -1647,10 +1712,6 @@ final class GameScene: SKScene {
 
     /// Bright naked-eye stars visible from New York City (lat 41°N).
     /// Tuples: (RA in decimal hours, Dec in degrees, apparent magnitude)
-    /// Naked-eye stars visible from New York City (lat 41°N, Dec > −50°), mag ≤ 3.5.
-    /// Tuples: (RA decimal hours, Dec degrees, apparent magnitude)
-    /// Positions are mapped to the 3000×3000 virtual world and subsetted
-    /// to the actual world size at runtime.
     private static let nycStarData: [(Float, Float, Float)] = [
         // Orion
         (5.92, 7.41, 0.42),  (5.24,-8.20, 0.13),  (5.42, 6.35, 1.64),
@@ -1796,21 +1857,19 @@ final class GameScene: SKScene {
         for s in starNodes { s.removeFromParent() }
         starNodes.removeAll()
         let vw = virtualWorldWidth, vh = virtualWorldHeight
-        // All star positions are mapped to the 3000×3000 virtual world grid.
-        // In virtual mode all stars appear; in screen mode stars outside the
-        // screen bounds are omitted, giving a consistent subset.
         let refW: CGFloat = 3000, refH: CGFloat = 3000
         for (ra, dec, mag) in GameScene.nycStarData {
-            guard CGFloat(dec) > -50 else { continue }
-            // Map RA 0–24h → x across refW, Dec −50°…+90° → y across refH
+            // PATCH 1 — Map RA 0–24h → x across refW.
+            // The dataset spans ≈ −75° … +89° dec; map the full −80°…+90° window
+            // (170°) so stars are distributed across the entire 3000×3000 field.
             let x = CGFloat(ra / 24.0) * refW
-            let y = CGFloat((dec + 50.0) / 140.0) * refH
-            guard x <= vw && y <= vh else { continue }  // skip stars outside current world
+            let y = CGFloat((CGFloat(dec) + 80.0) / 170.0) * refH
+            guard x <= vw && y <= vh else { continue }
             let radius = max(0.8, CGFloat(2.8 - mag * 0.38))
             let alpha  = max(0.40, CGFloat(0.95 - mag * 0.12))
             let star = SKShapeNode(circleOfRadius: radius)
             star.fillColor = .white; star.strokeColor = .clear
-            if mag < 2.0 { star.glowWidth = 1.5 }   // subtle halo on bright stars
+            if mag < 2.0 { star.glowWidth = 1.5 }
             star.alpha = alpha; star.zPosition = 2
             star.position = CGPoint(x: x, y: y)
             star.name = "star"
@@ -1835,21 +1894,41 @@ final class GameScene: SKScene {
         needleDirectionArrow?.removeFromParent()
         dartDirectionArrow?.removeFromParent()
         sunDirectionArrow?.removeFromParent()
+        needleDistanceLabel?.removeFromParent()   // PATCH 4a
+        dartDistanceLabel?.removeFromParent()
 
-        // Needle pointer: the actual needle silhouette scaled to 0.75x, orange
+        // Needle pointer: scaled-down silhouette, deliberately fainter than the live ship
+        // so it reads as a HUD indicator rather than a second ship on screen.
         let needleColor = SKColor(red: 0.9, green: 0.45, blue: 0.15, alpha: 1)
         let np = CGMutablePath()
-        let ns: CGFloat = 0.75
+        let ns: CGFloat = 0.50   // 50 % of live-ship size (was 0.75)
         np.move(to: CGPoint(x: 0,    y: -24*ns)); np.addLine(to: CGPoint(x: 0,    y: 18*ns))
         np.move(to: CGPoint(x: -3*ns, y: -16*ns)); np.addLine(to: CGPoint(x: 3*ns, y: -16*ns))
         np.move(to: CGPoint(x: -3*ns, y:  -8*ns)); np.addLine(to: CGPoint(x: 3*ns, y:  -8*ns))
         np.move(to: CGPoint(x: -4*ns, y:   0*ns)); np.addLine(to: CGPoint(x: 4*ns, y:   0*ns))
         np.move(to: CGPoint(x: -3*ns, y:   8*ns)); np.addLine(to: CGPoint(x: 3*ns, y:   8*ns))
         let needlePtr = SKShapeNode(path: np)
-        needlePtr.strokeColor = needleColor; needlePtr.lineWidth = 1.8
-        needlePtr.glowWidth = 3; needlePtr.zPosition = 90; needlePtr.alpha = 0
+        needlePtr.strokeColor = needleColor; needlePtr.lineWidth = 1.2   // thinner stroke
+        needlePtr.glowWidth = 1; needlePtr.zPosition = 90; needlePtr.alpha = 0  // no glow
         needlePtr.name = "dirArrow"; addChild(needlePtr)
         needleDirectionArrow = needlePtr
+
+        // PATCH 4b — Head dot at the nose so the opponent can read facing direction.
+        // Child of the arrow so it rotates automatically with it each frame.
+        let arrowHeadDot = SKShapeNode(circleOfRadius: 8 * ns)
+        arrowHeadDot.fillColor = needleColor; arrowHeadDot.strokeColor = .clear
+        arrowHeadDot.position = CGPoint(x: 0, y: 21 * ns)   // mirrors live needleHeadDot y=21
+        arrowHeadDot.zPosition = 1
+        needlePtr.addChild(arrowHeadDot)
+
+        // PATCH 4b — Floating distance-to-wedge label.
+        // Sibling (not child) so text stays upright regardless of arrow rotation.
+        let distLabel = SKLabelNode(text: "")
+        distLabel.fontName = "AvenirNext-Bold"; distLabel.fontSize = 12
+        distLabel.fontColor = needleColor
+        distLabel.horizontalAlignmentMode = .left; distLabel.verticalAlignmentMode = .center
+        distLabel.zPosition = 91; distLabel.alpha = 0; distLabel.name = "needleDistLabel"
+        addChild(distLabel); needleDistanceLabel = distLabel
 
         // Dart pointer: the actual dart silhouette scaled to 0.85x, blue
         let dartColor = SKColor(red: 0.25, green: 0.6, blue: 1.0, alpha: 1)
@@ -1866,7 +1945,15 @@ final class GameScene: SKScene {
         dartPtr.name = "dirArrow"; addChild(dartPtr)
         dartDirectionArrow = dartPtr
 
-        // Sun pointer: starburst symbol (no arrow body — it rotates to point at sun itself)
+        // Distance label beside the dart/wedge edge arrow — shown when needle is played manually
+        let dartDistLabel = SKLabelNode(text: "")
+        dartDistLabel.fontName = "AvenirNext-Bold"; dartDistLabel.fontSize = 12
+        dartDistLabel.fontColor = dartColor
+        dartDistLabel.horizontalAlignmentMode = .left; dartDistLabel.verticalAlignmentMode = .center
+        dartDistLabel.zPosition = 91; dartDistLabel.alpha = 0; dartDistLabel.name = "dartDistLabel"
+        addChild(dartDistLabel); dartDistanceLabel = dartDistLabel
+
+        // Sun pointer: starburst symbol
         let sunColor = SKColor(red: 1.0, green: 0.85, blue: 0.2, alpha: 1)
         let sunPtr = SKShapeNode(circleOfRadius: 5)
         sunPtr.fillColor = .clear; sunPtr.strokeColor = sunColor
@@ -1881,7 +1968,6 @@ final class GameScene: SKScene {
             sn.strokeColor = sunColor; sn.lineWidth = 1.5; sn.glowWidth = 1
             sunPtr.addChild(sn)
         }
-        // Small pointing triangle so the whole node rotates toward sun
         let tip = CGMutablePath()
         tip.move(to: CGPoint(x: 0, y: 16))
         tip.addLine(to: CGPoint(x: -5, y: 8))
@@ -1900,9 +1986,7 @@ final class GameScene: SKScene {
         setupVirtualBoundary()
         lastLaidOutSize = .zero
         layoutForCurrentSize()
-        // Reposition sun
         sunNode?.position = CGPoint(x: virtualWorldWidth / 2, y: virtualWorldHeight / 2)
-        // Reset camera to screen centre (non-virtual) or ship position (virtual)
         if virtualScreenMode == .off {
             cameraCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         } else {
@@ -1917,86 +2001,71 @@ final class GameScene: SKScene {
 
     private func updateCamera(currentTime: TimeInterval, dt: TimeInterval) {
         guard virtualScreenMode != .off else {
-            // Non-virtual: fix camera at screen centre and keep HUD at standard positions
             cameraCenter = CGPoint(x: size.width / 2, y: size.height / 2)
             cameraNode.position = cameraCenter
             updateDirectionArrows()
             return
         }
 
-        // Determine which ship the camera should chase
         #if DEBUG
-        let followed: Ship = (!needleAIEnabled && wedgeAIEnabled) ? needle : dart
+        let followed: Ship = gameOver ? (gameOverFollowedShip ?? dart)
+                           : (!needleAIEnabled && wedgeAIEnabled) ? needle : dart
         #else
-        let followed: Ship = dart
+        let followed: Ship = gameOver ? (gameOverFollowedShip ?? dart) : dart
         #endif
 
-        // Decide camera target
         let target: CGPoint
         if !followed.node.isHidden {
             target = followed.node.position
         } else {
-            // Ship is dead — hold for 1 s then glide to respawn point
             let respawnPt  = (followed === needle) ? needleRespawnTarget : dartRespawnTarget
             let panAfter   = (followed === needle) ? cameraPanToNeedleAfter : cameraPanToDartAfter
             target = (currentTime >= panAfter && panAfter > 0) ? respawnPt : cameraCenter
         }
 
-        // Smooth follow (lerp)
         let t = min(CGFloat(dt) * 5.0, 1.0)
         cameraCenter.x += (target.x - cameraCenter.x) * t
         cameraCenter.y += (target.y - cameraCenter.y) * t
         cameraNode.position = cameraCenter
 
-        // Keep all HUD nodes on screen
         updateHUDPositions()
         updateDirectionArrows()
     }
 
-    /// In virtual mode, every world-space HUD node must track the camera.
     private func updateHUDPositions() {
         let cx = cameraCenter.x, cy = cameraCenter.y
         let sw = size.width,     sh = size.height
         let topY    = cy + sh/2 - 30 - safeAreaTopInset
         let bottomY = cy - sh/2 + safeAreaBottomInset
-        let br: CGFloat = 40  // button radius
-        let innerR:  CGFloat = br * 0.6
+        let br: CGFloat = 40
         let padding: CGFloat = 12
 
         needleScoreNode?.position  = CGPoint(x: cx - sw/2 + 24, y: topY)
         dartScoreNode?.position    = CGPoint(x: cx + sw/2 - 24, y: topY)
         optionsButton?.position    = CGPoint(x: cx, y: topY)
         optionsOverlay?.position   = CGPoint(x: cx, y: cy)
-        optionsDimmer?.position    = CGPoint(x: cx, y: cy)
 
         let fireX = cx + sw/2 - br - 20
         let fireY = bottomY + br + 20
         fireThrustButton?.position  = CGPoint(x: fireX, y: fireY)
-        rightThrustButton?.position = CGPoint(x: fireX - (br + innerR + padding), y: fireY)
+        rightThrustButton?.position = CGPoint(x: fireX - (br * 2 + padding), y: fireY)
 
         let firePos = CGPoint(x: fireX, y: fireY)
         dartBulletCounterNode?.position  = CGPoint(x: fireX, y: fireY + br + 20)
-        rightClusterTitle?.position      = CGPoint(x: fireX - (br + innerR + padding)/2 + br/2,
+        rightClusterTitle?.position      = CGPoint(x: fireX - (br + padding / 2),
                                                     y: fireY + br + 50)
 
         #if DEBUG
         let leftFireX = cx - sw/2 + br + 20
         let leftFireY = fireY
         leftFireButtonRef?.position  = CGPoint(x: leftFireX, y: leftFireY)
-        leftThrustButton?.position   = CGPoint(x: leftFireX + (br + innerR + padding), y: leftFireY)
+        leftThrustButton?.position   = CGPoint(x: leftFireX + (br * 2 + padding), y: leftFireY)
         needleBulletCounterNode?.position = CGPoint(x: leftFireX, y: leftFireY + br + 20)
         leftClusterTitle?.position        = CGPoint(x: leftFireX, y: leftFireY + br + 50)
-        _ = firePos  // suppress unused warning
+        _ = firePos
         #endif
-
-        // Keep overlay dimmer covering the screen
-        if let dimmer = optionsDimmer {
-            dimmer.path = CGPath(rect: CGRect(x: -sw/2, y: -sh/2, width: sw, height: sh), transform: nil)
-        }
     }
 
-    /// Position a pointer at the screen edge in the direction of a world point.
-    /// Returns true if the point is off-screen (pointer made visible), false if on-screen (hidden).
     @discardableResult
     private func positionPointer(_ ptr: SKShapeNode?,
                                   towardPoint worldPt: CGPoint) -> Bool {
@@ -2016,37 +2085,64 @@ final class GameScene: SKScene {
     }
 
     private func updateDirectionArrows() {
+        // PATCH 5a — non-virtual mode: hide everything including distance label
         guard virtualScreenMode != .off else {
             needleDirectionArrow?.alpha = 0
             dartDirectionArrow?.alpha   = 0
             sunDirectionArrow?.alpha    = 0
+            needleDistanceLabel?.alpha  = 0
+            dartDistanceLabel?.alpha    = 0
             return
         }
 
-        // --- Needle pointer ---
+        // PATCH 5b — Needle pointer + distance label
         if needle.node.isHidden {
             needleDirectionArrow?.alpha = 0
+            needleDistanceLabel?.alpha  = 0
         } else if positionPointer(needleDirectionArrow, towardPoint: needle.node.position) {
-            // Show silhouette facing the same way the ship faces
+            // Arrow rotates to mirror the live ship's heading
             needleDirectionArrow?.zRotation = needle.node.zRotation
-            needleDirectionArrow?.alpha = 0.85
+            needleDirectionArrow?.alpha = 0.45   // faint — it's a HUD indicator, not a ship
+            // Distance readout offset from the arrow, stays upright (label is a sibling node)
+            if let arrowPos = needleDirectionArrow?.position {
+                let dist = hypot(needle.node.position.x - dart.node.position.x,
+                                  needle.node.position.y - dart.node.position.y)
+                needleDistanceLabel?.text = "\(Int(dist.rounded()))"
+                needleDistanceLabel?.position = CGPoint(x: arrowPos.x + 24, y: arrowPos.y + 16)
+                needleDistanceLabel?.alpha = 0.45
+            }
+        } else {
+            // Needle is on-screen — hide the label
+            needleDistanceLabel?.alpha = 0
         }
 
-        // --- Dart pointer ---
+        // --- Dart pointer + distance label (shown when needle is human-controlled) ---
         if dart.node.isHidden {
             dartDirectionArrow?.alpha = 0
+            dartDistanceLabel?.alpha  = 0
         } else if positionPointer(dartDirectionArrow, towardPoint: dart.node.position) {
             dartDirectionArrow?.zRotation = dart.node.zRotation
             dartDirectionArrow?.alpha = 0.85
+            // Show distance readout only when needle is played manually (not when both are AI)
+            if !needleAIEnabled, let arrowPos = dartDirectionArrow?.position {
+                let dist = hypot(dart.node.position.x - needle.node.position.x,
+                                  dart.node.position.y - needle.node.position.y)
+                dartDistanceLabel?.text = "\(Int(dist.rounded()))"
+                dartDistanceLabel?.position = CGPoint(x: arrowPos.x + 24, y: arrowPos.y + 16)
+                dartDistanceLabel?.alpha = 0.85
+            } else {
+                dartDistanceLabel?.alpha = 0
+            }
+        } else {
+            dartDistanceLabel?.alpha = 0
         }
 
         // --- Sun pointer: only when sun is off-screen ---
         let sunPos = sunNode?.position ?? CGPoint(x: virtualWorldWidth/2, y: virtualWorldHeight/2)
         if positionPointer(sunDirectionArrow, towardPoint: sunPos) {
-            // Rotate the whole symbol so the tip triangle points toward the sun
             let dx = sunPos.x - cameraCenter.x
             let dy = sunPos.y - cameraCenter.y
-            sunDirectionArrow?.zRotation = atan2(dx, dy)
+            sunDirectionArrow?.zRotation = atan2(dy, dx) - .pi / 2
             sunDirectionArrow?.alpha = 0.8
         }
     }
@@ -2060,14 +2156,22 @@ final class GameScene: SKScene {
         overlay.position = CGPoint(x: size.width/2, y: size.height/2)
 
         let w: CGFloat = min(380, size.width - 40)
-        let h: CGFloat = 460
+        let h: CGFloat = 492   // +32 to accommodate second tab row
 
         let bgPath = CGPath(roundedRect: CGRect(x: -w/2, y: -h/2, width: w, height: h),
                             cornerWidth: 14, cornerHeight: 14, transform: nil)
         let bg = SKShapeNode(path: bgPath)
-        bg.fillColor = SKColor(white: 0.1, alpha: 0.9)
+        bg.fillColor = SKColor(white: 0.08, alpha: 1.0)
         bg.strokeColor = .white; bg.lineWidth = 2; bg.zPosition = 201; bg.name = "options_bg"
         overlay.addChild(bg)
+
+        // Dimmer sits directly behind the panel — same rect, lower zPosition
+        if let dimmer = optionsDimmer {
+            dimmer.path = bgPath
+            dimmer.position = .zero
+            dimmer.zPosition = 200
+            if dimmer.parent == nil { overlay.addChild(dimmer) }
+        }
 
         func makeLabel(_ text: String, y: CGFloat, name: String) -> SKLabelNode {
             let label = SKLabelNode(text: text)
@@ -2099,61 +2203,85 @@ final class GameScene: SKScene {
         shipsTabButton   = makeTab("Controls",    x: leftX + 2 * tabWidth, name: "tab_ships")
         aboutTabButton   = makeTab("About",       x: leftX + 3 * tabWidth, name: "tab_about")
 
+        // Row 2 — two expansion tabs centred under the four-tab row
+        let tabRow2Y = tabY - tabHeight - 4
+        shipSelectionTabButton = makeTab("Ships",    x: -tabWidth / 2, name: "tab_ship_selection")
+        networkTabButton       = makeTab("Network",  x:  tabWidth / 2, name: "tab_network")
+        // Override y to the second row (makeTab uses tabY by default)
+        shipSelectionTabButton?.position.y = tabRow2Y
+        networkTabButton?.position.y       = tabRow2Y
+
+        // "Coming Soon" placeholder for Ship Selection tab
+        let shipSelContainer = SKNode(); shipSelContainer.zPosition = 202; shipSelContainer.isHidden = true
+        let shipSelLabel = SKLabelNode(text: "Coming Soon")
+        shipSelLabel.fontName = "AvenirNext-Bold"; shipSelLabel.fontSize = 22
+        shipSelLabel.fontColor = SKColor(white: 1.0, alpha: 0.4)
+        shipSelLabel.verticalAlignmentMode = .center; shipSelLabel.horizontalAlignmentMode = .center
+        shipSelLabel.position = .zero
+        shipSelContainer.addChild(shipSelLabel)
+        overlay.addChild(shipSelContainer); shipSelectionContainer = shipSelContainer
+
+        // "Coming Soon" placeholder for Network tab
+        let netContainer = SKNode(); netContainer.zPosition = 202; netContainer.isHidden = true
+        let netLabel = SKLabelNode(text: "Coming Soon")
+        netLabel.fontName = "AvenirNext-Bold"; netLabel.fontSize = 22
+        netLabel.fontColor = SKColor(white: 1.0, alpha: 0.4)
+        netLabel.verticalAlignmentMode = .center; netLabel.horizontalAlignmentMode = .center
+        netLabel.position = .zero
+        netContainer.addChild(netLabel)
+        overlay.addChild(netContainer); networkContainer = netContainer
+
         // MARK: Environment tab content
-        let screenEdgeLabel = makeLabel("Screen Edge:", y: h/2 - 90, name: "env_label_screen_edge")
+        let screenEdgeLabel = makeLabel("Screen Edge:", y: h/2 - 122, name: "env_label_screen_edge")
         overlay.addChild(screenEdgeLabel)
 
         let bounceBtn = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        bounceBtn.name = "opt_edge_bounce"; bounceBtn.position = CGPoint(x: -60, y: h/2 - 115)
+        bounceBtn.name = "opt_edge_bounce"; bounceBtn.position = CGPoint(x: -60, y: h/2 - 147)
         bounceBtn.strokeColor = .white; bounceBtn.lineWidth = 2; bounceBtn.zPosition = 202; overlay.addChild(bounceBtn)
         bounceBtn.addChild(makeTabInnerLabel("Bounce")); edgeBounceButton = bounceBtn
 
         let wrapBtn = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        wrapBtn.name = "opt_edge_wrap"; wrapBtn.position = CGPoint(x: 60, y: h/2 - 115)
+        wrapBtn.name = "opt_edge_wrap"; wrapBtn.position = CGPoint(x: 60, y: h/2 - 147)
         wrapBtn.strokeColor = .white; wrapBtn.lineWidth = 2; wrapBtn.zPosition = 202; overlay.addChild(wrapBtn)
         wrapBtn.addChild(makeTabInnerLabel("Wrap")); edgeWrapButton = wrapBtn
 
-        // Sun at Center — label + ON/OFF button on the SAME ROW so hit area matches visual
         let sunRowLabel = SKLabelNode(text: "Sun at Center:")
         sunRowLabel.name = "env_label_sun"
         sunRowLabel.fontName = "AvenirNext-Bold"; sunRowLabel.fontSize = 16
         sunRowLabel.fontColor = .white; sunRowLabel.verticalAlignmentMode = .center
-        sunRowLabel.horizontalAlignmentMode = .left
-        sunRowLabel.position = CGPoint(x: -w/2 + 20, y: h/2 - 190); sunRowLabel.zPosition = 202
+        sunRowLabel.horizontalAlignmentMode = .right
+        sunRowLabel.position = CGPoint(x: -8, y: h/2 - 222); sunRowLabel.zPosition = 202
         overlay.addChild(sunRowLabel)
 
         let sunBtn = SKShapeNode(rectOf: CGSize(width: 60, height: 30), cornerRadius: 6)
-        sunBtn.name = "opt_sun_toggle"; sunBtn.position = CGPoint(x: w/2 - 50, y: h/2 - 190)
+        sunBtn.name = "opt_sun_toggle"; sunBtn.position = CGPoint(x: 46, y: h/2 - 222)
         sunBtn.strokeColor = .white; sunBtn.lineWidth = 2; sunBtn.zPosition = 202
         overlay.addChild(sunBtn); sunToggleButton = sunBtn
         sunBtn.addChild(makeTabInnerLabel("ON"))
 
-        // Affects Bullets — label + button, pinned inside the gravity group box (x: -130…130)
         let bulletLbl = SKLabelNode(text: "Affects Bullets:")
         bulletLbl.name = "env_label_affects"; bulletLbl.fontName = "AvenirNext-Bold"; bulletLbl.fontSize = 14
         bulletLbl.fontColor = .white; bulletLbl.verticalAlignmentMode = .center
         bulletLbl.horizontalAlignmentMode = .left
-        bulletLbl.position = CGPoint(x: -118, y: h/2 - 307); bulletLbl.zPosition = 203
+        bulletLbl.position = CGPoint(x: -118, y: h/2 - 339); bulletLbl.zPosition = 203
         overlay.addChild(bulletLbl); bulletGravLabel = bulletLbl
 
         let bulletBtn = SKShapeNode(rectOf: CGSize(width: 60, height: 30), cornerRadius: 6)
-        bulletBtn.name = "opt_bullet_grav_toggle"; bulletBtn.position = CGPoint(x: 88, y: h/2 - 307)
+        bulletBtn.name = "opt_bullet_grav_toggle"; bulletBtn.position = CGPoint(x: 88, y: h/2 - 339)
         bulletBtn.strokeColor = .white; bulletBtn.lineWidth = 2; bulletBtn.zPosition = 202
         overlay.addChild(bulletBtn); bulletGravToggleButton = bulletBtn
         bulletBtn.addChild(makeTabInnerLabel("ON"))
 
-        let gravityHeading = makeLabel("Gravity", y: h/2 - 270, name: "env_label_gravity")
+        let gravityHeading = makeLabel("Gravity", y: h/2 - 302, name: "env_label_gravity")
         overlay.addChild(gravityHeading)
 
-        // Gravity slider
-        let gravTrackY: CGFloat = h/2 - 360
+        let gravTrackY: CGFloat = h/2 - 392
         let gravTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
         gravTrack.strokeColor = .white; gravTrack.fillColor = .white
         gravTrack.position = CGPoint(x: 0, y: gravTrackY)
         gravTrack.name = "opt_grav_track"; gravTrack.zPosition = 202; overlay.addChild(gravTrack)
         gravitySliderTrack = gravTrack
 
-        // Ticks at 0×, 2.5×, 5× default
         let gravTickLabels = ["0×", "2.5×", "5×"]
         for (i, tickLabel) in gravTickLabels.enumerated() {
             let frac = CGFloat(i) / CGFloat(gravTickLabels.count - 1)
@@ -2183,20 +2311,20 @@ final class GameScene: SKScene {
         gravValLbl.name = "opt_grav_vallabel"; overlay.addChild(gravValLbl)
         gravityValueLabel = gravValLbl
 
-        let gravityGroupRect = CGRect(x: -130, y: h/2 - 420, width: 260, height: 170)
+        let gravityGroupRect = CGRect(x: -130, y: h/2 - 452, width: 260, height: 170)
         let gravityGroup = SKShapeNode(rect: gravityGroupRect, cornerRadius: 8)
         gravityGroup.name = "env_gravity_group"; gravityGroup.strokeColor = SKColor(white: 1.0, alpha: 0.6)
         gravityGroup.lineWidth = 1; gravityGroup.fillColor = .clear; gravityGroup.zPosition = 201.5
         overlay.addChild(gravityGroup)
 
         // MARK: Ships/Controls tab content
-        let aiSectionHeaderY: CGFloat = 155
-        let needleAITrackY:   CGFloat = 130
-        let wedgeAITrackY:    CGFloat = 90
-        let bulletsSectionY:  CGFloat = 55
-        let bulletsY:         CGFloat = 28
-        let bulletLifeY:      CGFloat = -60
-        let bulletButtonsY:   CGFloat = -90
+        let aiSectionHeaderY: CGFloat = 123
+        let needleAITrackY:   CGFloat = 98
+        let wedgeAITrackY:    CGFloat = 58
+        let bulletsSectionY:  CGFloat = 23
+        let bulletsY:         CGFloat = -4
+        let bulletLifeY:      CGFloat = -92
+        let bulletButtonsY:   CGFloat = -122
 
         let aiSectionTitle = makeLabel("AI Intelligence", y: aiSectionHeaderY, name: "ships_label_ai_intelligence_title")
         overlay.addChild(aiSectionTitle)
@@ -2329,84 +2457,41 @@ final class GameScene: SKScene {
         needleCountLabel.text = bulletLabelText(needleBulletLimitSelection)
         needleCountLabel.zPosition = 202; overlay.addChild(needleCountLabel)
 
-        let lifeLabel = makeLabel("Bullet Life:", y: bulletLifeY, name: "ships_label_bullet_life")
-        overlay.addChild(lifeLabel)
-
-        // Bullet-life slider
-        let lifeTrackY: CGFloat = bulletButtonsY
-        let lifeTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
-        lifeTrack.strokeColor = .white; lifeTrack.fillColor = .white
-        lifeTrack.position = CGPoint(x: 0, y: lifeTrackY)
-        lifeTrack.name = "opt_bullet_life_track"; lifeTrack.zPosition = 202; overlay.addChild(lifeTrack)
-        bulletLifeSliderTrack = lifeTrack
-
-        // Ticks at 0.5×, 1×, 2×, 3× of 3 s default
-        let lifeTickLabels = ["1.5s", "3s", "6s", "9s"]
-        let lifeTickSteps  = [0, 2, 6, 10]
-        for (i, tickLabel) in lifeTickLabels.enumerated() {
-            let frac = CGFloat(lifeTickSteps[i]) / CGFloat(bulletLifeSliderSteps)
-            let tx = -sliderTrackHalfWidth + frac * sliderTrackWidth
-            let tick = SKShapeNode(rectOf: CGSize(width: 2, height: 8))
-            tick.fillColor = .white; tick.strokeColor = .clear
-            tick.position = CGPoint(x: tx, y: lifeTrackY)
-            tick.name = "opt_bullet_life_tick_\(i)"; tick.zPosition = 203; overlay.addChild(tick)
-            let tl = SKLabelNode(text: tickLabel)
-            tl.fontName = "AvenirNext-Medium"; tl.fontSize = 11; tl.fontColor = .white
-            tl.verticalAlignmentMode = .top; tl.horizontalAlignmentMode = .center
-            tl.position = CGPoint(x: tx, y: lifeTrackY - 7); tl.zPosition = 203
-            tl.name = "opt_bullet_life_ticklabel_\(i)"; overlay.addChild(tl)
-        }
-
-        let lifeKnob = SKShapeNode(circleOfRadius: 8)
-        lifeKnob.fillColor = .white; lifeKnob.strokeColor = .white; lifeKnob.lineWidth = 2
-        let lifeKnobX = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
-        lifeKnob.position = CGPoint(x: lifeKnobX, y: lifeTrackY)
-        lifeKnob.name = "opt_bullet_life_knob"; lifeKnob.zPosition = 204; overlay.addChild(lifeKnob)
-        bulletLifeSliderKnob = lifeKnob
-
-        let lifeValLbl = SKLabelNode(text: bulletLifeLabelText())
-        lifeValLbl.fontName = "AvenirNext-Medium"; lifeValLbl.fontSize = 12; lifeValLbl.fontColor = .white
-        lifeValLbl.verticalAlignmentMode = .bottom; lifeValLbl.horizontalAlignmentMode = .center
-        lifeValLbl.position = CGPoint(x: 0, y: lifeTrackY + 12); lifeValLbl.zPosition = 203
-        lifeValLbl.name = "opt_bullet_life_vallabel"; overlay.addChild(lifeValLbl)
-        bulletLifeValueLabel = lifeValLbl
-
         // MARK: Gameplay tab content
         let newMatchBtn = SKShapeNode(rectOf: CGSize(width: 140, height: 36), cornerRadius: 8)
-        newMatchBtn.name = "game_new_match"; newMatchBtn.position = CGPoint(x: 0, y: h/2 - 80)
+        newMatchBtn.name = "game_new_match"; newMatchBtn.position = CGPoint(x: 0, y: h/2 - 112)
         newMatchBtn.fillColor = .clear; newMatchBtn.strokeColor = .white; newMatchBtn.lineWidth = 2
         newMatchBtn.zPosition = 202; overlay.addChild(newMatchBtn)
         newMatchBtn.addChild(makeTabInnerLabel("New Match", fontSize: 16))
 
-        let aimLabel = makeLabel("Aim Persists:", y: h/2 - 145, name: "game_label_aim_persist")
+        let aimLabel = makeLabel("Aim Persists:", y: h/2 - 177, name: "game_label_aim_persist")
         overlay.addChild(aimLabel)
 
         let aimBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        aimBtn.name = "game_aim_persist_toggle"; aimBtn.position = CGPoint(x: 0, y: h/2 - 175)
+        aimBtn.name = "game_aim_persist_toggle"; aimBtn.position = CGPoint(x: 0, y: h/2 - 207)
         aimBtn.strokeColor = .white; aimBtn.lineWidth = 2; aimBtn.zPosition = 202
         overlay.addChild(aimBtn); aimPersistToggleButton = aimBtn
 
-        let aiLabel = makeLabel("Needle AI:", y: h/2 - 225, name: "game_label_needle_ai")
+        let aiLabel = makeLabel("Needle AI:", y: h/2 - 257, name: "game_label_needle_ai")
         overlay.addChild(aiLabel)
 
         let aiBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        aiBtn.name = "game_ai_toggle"; aiBtn.position = CGPoint(x: 0, y: h/2 - 255)
+        aiBtn.name = "game_ai_toggle"; aiBtn.position = CGPoint(x: 0, y: h/2 - 287)
         aiBtn.strokeColor = .white; aiBtn.lineWidth = 2; aiBtn.zPosition = 202
         overlay.addChild(aiBtn); aiToggleButton = aiBtn
 
-        let wedgeAILabel = makeLabel("Wedge AI:", y: h/2 - 305, name: "game_label_wedge_ai")
+        let wedgeAILabel = makeLabel("Wedge AI:", y: h/2 - 337, name: "game_label_wedge_ai")
         overlay.addChild(wedgeAILabel)
 
         let wedgeAIBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        wedgeAIBtn.name = "game_wedge_ai_toggle"; wedgeAIBtn.position = CGPoint(x: 0, y: h/2 - 335)
+        wedgeAIBtn.name = "game_wedge_ai_toggle"; wedgeAIBtn.position = CGPoint(x: 0, y: h/2 - 367)
         wedgeAIBtn.strokeColor = .white; wedgeAIBtn.lineWidth = 2; wedgeAIBtn.zPosition = 202
         overlay.addChild(wedgeAIBtn); wedgeAIToggleButton = wedgeAIBtn
 
-        // Virtual screen slider  — off / medium / large
-        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 368, name: "game_label_virtual_screen")
+        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 400, name: "game_label_virtual_screen")
         overlay.addChild(vsLabel)
 
-        let vsTrackY: CGFloat = h/2 - 395
+        let vsTrackY: CGFloat = h/2 - 427
         let vsTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
         vsTrack.strokeColor = .white; vsTrack.fillColor = .white; vsTrack.alpha = 1.0
         vsTrack.position = CGPoint(x: 0, y: vsTrackY)
@@ -2458,7 +2543,6 @@ final class GameScene: SKScene {
         return lbl
     }
 
-    // FIX #7 — helper computes which notch the touch is on, for snap-drag
     private func sliderIndexForOverlayX(_ x: CGFloat) -> Int {
         let step = sliderTrackWidth / CGFloat(bulletSliderSteps)
         let idx = Int(round((x + sliderTrackHalfWidth) / step))
@@ -2467,7 +2551,7 @@ final class GameScene: SKScene {
 
     private func gravityLabelText() -> String {
         if gravitySliderSelection == 0 { return "Off" }
-        let val = gravityMultiplier / 8.0   // ratio relative to original strong default
+        let val = gravityMultiplier / 8.0
         return String(format: "%.1f×", val)
     }
 
@@ -2490,8 +2574,6 @@ final class GameScene: SKScene {
     }
 
     private func refreshOptionsUI() {
-        // Black background: selected = solid white fill + black text (maximum contrast)
-        //                   unselected = clear fill + white stroke + white text
         let selFill = SKColor.white
         let offFill = SKColor.clear
         let selText = SKColor.black
@@ -2511,23 +2593,27 @@ final class GameScene: SKScene {
         let gamePrefixes  = ["game_"]
         let envPrefixes   = ["opt_edge_", "opt_sun_toggle", "opt_bullet_grav_toggle",
                              "opt_grav_", "env_label_", "env_gravity_group"]
-        let shipsPrefixes = ["ships_label_", "opt_bullet_life_",
+        let shipsPrefixes = ["ships_label_",
                              "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_"]
 
         optionsOverlay?.children.forEach { node in
             if node.name == "options_bg" { return }
             if node === gameTabButton || node === optionsTabButton ||
-               node === shipsTabButton || node === aboutTabButton || node === aboutContainer { return }
+               node === shipsTabButton || node === aboutTabButton ||
+               node === shipSelectionTabButton || node === networkTabButton ||
+               node === aboutContainer || node === shipSelectionContainer || node === networkContainer { return }
             let name = node.name ?? ""
             switch currentOptionsTab {
-            case .environment: node.isHidden = !envPrefixes.contains(where: { name.hasPrefix($0) })
-            case .ships:       node.isHidden = !shipsPrefixes.contains(where: { name.hasPrefix($0) })
-            case .game:        node.isHidden = !gamePrefixes.contains(where: { name.hasPrefix($0) })
-            case .about:       node.isHidden = true
+            case .environment:   node.isHidden = !envPrefixes.contains(where: { name.hasPrefix($0) })
+            case .ships:         node.isHidden = !shipsPrefixes.contains(where: { name.hasPrefix($0) })
+            case .game:          node.isHidden = !gamePrefixes.contains(where: { name.hasPrefix($0) })
+            case .about, .shipSelection, .network: node.isHidden = true
             }
         }
 
-        aboutContainer?.isHidden = (currentOptionsTab != .about)
+        aboutContainer?.isHidden          = (currentOptionsTab != .about)
+        shipSelectionContainer?.isHidden   = (currentOptionsTab != .shipSelection)
+        networkContainer?.isHidden         = (currentOptionsTab != .network)
 
         func setTab(_ tabNode: SKShapeNode?, selected: Bool) {
             guard let tabNode, let lbl = tabNode.children.compactMap({ $0 as? SKLabelNode }).first else { return }
@@ -2537,10 +2623,12 @@ final class GameScene: SKScene {
             tabNode.glowWidth   = 0
             lbl.fontColor       = selected ? selText : offText
         }
-        setTab(gameTabButton,    selected: currentOptionsTab == .game)
-        setTab(optionsTabButton, selected: currentOptionsTab == .environment)
-        setTab(shipsTabButton,   selected: currentOptionsTab == .ships)
-        setTab(aboutTabButton,   selected: currentOptionsTab == .about)
+        setTab(gameTabButton,          selected: currentOptionsTab == .game)
+        setTab(optionsTabButton,       selected: currentOptionsTab == .environment)
+        setTab(shipsTabButton,         selected: currentOptionsTab == .ships)
+        setTab(aboutTabButton,         selected: currentOptionsTab == .about)
+        setTab(shipSelectionTabButton, selected: currentOptionsTab == .shipSelection)
+        setTab(networkTabButton,       selected: currentOptionsTab == .network)
 
         styleBtn(edgeBounceButton,   selected: edgeBehavior == .bounce)
         styleBtn(edgeWrapButton,     selected: edgeBehavior == .wrap)
@@ -2566,7 +2654,6 @@ final class GameScene: SKScene {
         setEnabled(bulletGravToggleButton, enabled: sunEnabled)
         bulletGravLabel?.alpha = sunEnabled ? 1.0 : 0.5
 
-        // Gravity slider — dim when sun is off
         let gravAlpha: CGFloat = sunEnabled ? 1.0 : 0.5
         gravitySliderTrack?.alpha = gravAlpha
         gravitySliderKnob?.alpha  = gravAlpha
@@ -2578,13 +2665,6 @@ final class GameScene: SKScene {
             knob.position = CGPoint(x: x, y: track.position.y)
         }
         gravityValueLabel?.text = gravityLabelText()
-
-        // Bullet-life slider knob
-        if let knob = bulletLifeSliderKnob, let track = bulletLifeSliderTrack {
-            let x = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
-            knob.position = CGPoint(x: x, y: track.position.y)
-        }
-        bulletLifeValueLabel?.text = bulletLifeLabelText()
 
         if let knob = virtualScreenSliderKnob, let track = virtualScreenSliderTrack {
             let x = -sliderTrackHalfWidth + CGFloat(virtualScreenSelection) * (sliderTrackWidth / CGFloat(virtualScreenSteps))
@@ -2606,10 +2686,8 @@ final class GameScene: SKScene {
             label.text = bulletLabelText(needleBulletLimitSelection)
         }
 
-        // FIX #9 — 3-level label names
         let aiLevelNames = ["basic", "smart", "expert"]
 
-        // Needle AI intelligence slider
         let needleAIOn = needleAIEnabled
         needleAISliderTrack?.alpha = needleAIOn ? 1.0 : 0.4
         if let knob = needleAISliderKnob, let track = needleAISliderTrack {
@@ -2628,7 +2706,6 @@ final class GameScene: SKScene {
             label.alpha = needleAIOn ? 1.0 : 0.4
         }
 
-        // Wedge AI intelligence slider
         let wedgeAIOn = wedgeAIEnabled
         wedgeAISliderTrack?.alpha = wedgeAIOn ? 1.0 : 0.4
         if let knob = wedgeAISliderKnob, let track = wedgeAISliderTrack {
@@ -2685,10 +2762,17 @@ final class GameScene: SKScene {
         let inset: CGFloat = 20
         let vw = virtualWorldWidth, vh = virtualWorldHeight
         let otherShip: Ship = (ship === needle) ? dart! : needle!
+        // Minimum safe separation from the opponent ship (pixels)
+        let minShipSeparation: CGFloat = 200
         for _ in 0..<100 {
             let p = CGPoint(x: CGFloat.random(in: inset...(vw-inset)),
                             y: CGFloat.random(in: inset...(vh-inset)))
-            if !otherShip.node.isHidden && otherShip.node.frame.insetBy(dx: -20, dy: -20).contains(p) { continue }
+            // Reject if too close to the other ship
+            if !otherShip.node.isHidden {
+                let dx = otherShip.node.position.x - p.x
+                let dy = otherShip.node.position.y - p.y
+                if dx*dx + dy*dy < minShipSeparation * minShipSeparation { continue }
+            }
             var tooClose = false
             enumerateChildNodes(withName: "missile") { node, stop in
                 let dx = node.position.x - p.x, dy = node.position.y - p.y
@@ -2706,7 +2790,6 @@ final class GameScene: SKScene {
     }
 
     private func respawnShip(_ ship: Ship) {
-        // Use the position that was pre-computed at explosion time (camera already panned there)
         let precomputed = (ship === needle) ? needleRespawnTarget : dartRespawnTarget
         let pos: CGPoint
         if precomputed != .zero { pos = precomputed }
@@ -2733,7 +2816,7 @@ final class GameScene: SKScene {
 
         for entity in entities { entity.update(deltaTime: dt) }
 
-        // FIX #8 — check for deferred respawns (wait until bullet life elapsed since death)
+        // FIX #8 — check for deferred respawns
         let respawnBulletLife = bulletLifeSeconds
         if needleRespawnScheduled && needle.node.isHidden {
             if currentTime - needleDestroyTime >= respawnBulletLife {
@@ -2750,53 +2833,35 @@ final class GameScene: SKScene {
             }
         }
 
+        if !gameOver || currentTime >= gameOverAnimationStartTime {
+
+        if gameOver && virtualScreenMode != .medium {
+            // Switch to 3000×3000 now that the 5-second grace period is up
+            virtualScreenSelection = 1
+            virtualScreenMode = .medium
+            applyVirtualScreenMode()
+        }
+
         if gameOver {
-            let driftAccel: CGFloat = thrustAcceleration * 0.6
+            // In game-over mode, override AI settings from the randomly-assigned levels
+            // so ships use the real AI path below rather than the old random drift steering.
+            needleAIEnabled       = true
+            needleAIIntelligence  = gameOverNeedleAILevel
+            wedgeAIEnabled        = true
+            wedgeAIIntelligence   = gameOverDartAILevel
+            // Restore infinite ammo each frame in case it was changed by respawn logic
+            if needleBulletsRemaining < Int.max / 2 { needleBulletsRemaining = Int.max }
+            if dartBulletsRemaining   < Int.max / 2 { dartBulletsRemaining   = Int.max }
+        }
 
-            if !needle.node.isHidden {
-                if currentTime >= driftNeedleNextToggle {
-                    driftNeedleThrustOn.toggle()
-                    driftNeedleNextToggle = currentTime + Double.random(in: 0.3...1.0)
-                }
-                if currentTime >= driftNeedleNextTurn {
-                    driftNeedleTargetAngle = CGFloat.random(in: 0...(2 * .pi))
-                    driftNeedleNextTurn = currentTime + Double.random(in: 0.6...1.8)
-                }
-                let nx = needle.node.position.x + sin(driftNeedleTargetAngle) * 100
-                let ny = needle.node.position.y + cos(driftNeedleTargetAngle) * 100
-                rotateShip(needle.node, toward: CGPoint(x: nx, y: ny), dt: dt)
-                needle.flame.alpha = driftNeedleThrustOn ? 1 : 0
-                if driftNeedleThrustOn { needle.applyThrust(accel: driftAccel, dt: CGFloat(dt)) }
-            }
-
-            if !dart.node.isHidden {
-                if currentTime >= driftDartNextToggle {
-                    driftDartThrustOn.toggle()
-                    driftDartNextToggle = currentTime + Double.random(in: 0.3...1.0)
-                }
-                if currentTime >= driftDartNextTurn {
-                    driftDartTargetAngle = CGFloat.random(in: 0...(2 * .pi))
-                    driftDartNextTurn = currentTime + Double.random(in: 0.6...1.8)
-                }
-                let dx2 = dart.node.position.x + sin(driftDartTargetAngle) * 100
-                let dy2 = dart.node.position.y + cos(driftDartTargetAngle) * 100
-                rotateShip(dart.node, toward: CGPoint(x: dx2, y: dy2), dt: dt)
-                dart.flame.alpha = driftDartThrustOn ? 1 : 0
-                if driftDartThrustOn { dart.applyThrust(accel: driftAccel, dt: CGFloat(dt)) }
-            }
-
-        } else {
-            // Normal play
+        do {
+            // Normal play (and game-over exhibition — same AI path, different settings)
             var needleAimTarget: CGPoint? = nil
             var dartAimTarget: CGPoint? = nil
             var needleEvasion = false
             var wedgeEvasion = false
-            // Collision-brake flags: computed before the rotation block so only one
-            // rotateShip call fires per frame (prevents two calls fighting each other).
             var needleCollisionBrake = false
             var wedgeCollisionBrake = false
-            // Hunt mode: opponent is out of bullets — approach and kill regardless of distance.
-            // Checked once here so both rotation and thrust/fire blocks share the same flag.
             let needleHuntingUnarmed = needleAIEnabled && needleAIIntelligence >= 2
                 && !needle.node.isHidden && !dart.node.isHidden
                 && dartBulletsRemaining == 0
@@ -2825,22 +2890,18 @@ final class GameScene: SKScene {
                             return false
                         }()
 
-                        // FIX #10 — expert AI uses larger avoidance radius
                         let avoidRadius: CGFloat = (needleAIIntelligence >= 2) ? 180 : 140
                         let tooClose = dist2 < avoidRadius * avoidRadius
-                        // FIX #9 — remapped: level >= 1 uses shipWillHitSun (was >= 2)
                         let shouldAvoidSun = (needleAIIntelligence >= 1)
                             ? (shipWillHitSun(needle, in: 3.5) || tooClose)
                             : (tooClose || onCollisionCourse)
 
-                        // Compute collision brake BEFORE rotation. Hunt mode is handled above.
                         if needleAIIntelligence >= 2 && !shouldAvoidSun {
                             needleCollisionBrake = collisionDecision(ship: needle, opponent: dart,
                                                                       killTime: dartKillTime, currentTime: currentTime)
                         }
 
                         if shouldAvoidSun {
-                            // Sun avoidance always has highest priority
                             let awayPoint = CGPoint(x: needle.node.position.x - dxs, y: needle.node.position.y - dys)
                             rotateShip(needle.node, toward: awayPoint, dt: dt)
                             needleAimTarget = awayPoint
@@ -2854,11 +2915,9 @@ final class GameScene: SKScene {
                             rotateShip(needle.node, toward: avoidPt, dt: dt)
                             needleAimTarget = avoidPt
                         } else {
-                            // FIX #9 — remapped: level >= 2 uses strategic AI (was >= 3)
                             if needleAIIntelligence >= 2 {
                                 let aimTarget: CGPoint
                                 if bulletHitUnavoidable(for: needle) {
-                                    // Hit inevitable — aim at opponent (use level3 for consistency with fire gate)
                                     aimTarget = level3AimPoint(shooter: needle, target: dart)
                                 } else {
                                     let (inDanger, awayPoint) = edgeAwareBulletDanger(for: needle, opponent: dart)
@@ -3147,20 +3206,19 @@ final class GameScene: SKScene {
                 }
             }
 
-            // Update target indicators
-            if let t = needleAimTarget {
-                needleTargetIndicator.position = t; needleTargetIndicator.alpha = 0.7
-            } else { needleTargetIndicator.alpha = 0 }
-
-            if let t = dartAimTarget {
-                dartTargetIndicator.position = t; dartTargetIndicator.alpha = 0.7
-            } else { dartTargetIndicator.alpha = 0 }
+            // Target indicators — commented out; uncomment to re-enable aim visualisation
+            // if let t = needleAimTarget {
+            //     needleTargetIndicator.position = t; needleTargetIndicator.alpha = 0.7
+            // } else { needleTargetIndicator.alpha = 0 }
+            //
+            // if let t = dartAimTarget {
+            //     dartTargetIndicator.position = t; dartTargetIndicator.alpha = 0.7
+            // } else { dartTargetIndicator.alpha = 0 }
 
             // MARK: Needle AI thrust + fire
             if needleAIEnabled && !needle.node.isHidden {
                 if needleAIIntelligence >= 2 {
                     if needleHuntingUnarmed {
-                        // Hunt: thrust to close distance unless we're braking to avoid overshoot
                         isThrustingNeedle = !needleCollisionBrake
                         aiThrustOn = isThrustingNeedle
                         aiNextThrustToggle = currentTime + 0.1
@@ -3191,9 +3249,6 @@ final class GameScene: SKScene {
                     isThrustingNeedle = aiThrustOn
                 }
 
-                // Certainty fire: check every frame (short cooldown), fire immediately on near-certain hit.
-                // Requires nose within 25° of aim point — prevents firing during evasion when
-                // the opponent happens to drift into the bullet's off-target path.
                 if needleAIIntelligence >= 2 && !needleCollisionBrake && !needleEvasion
                     && !dart.node.isHidden && (currentTime - dartVisibleSince) >= 1.0
                     && currentTime >= aiCertainFireCooldown
@@ -3246,7 +3301,6 @@ final class GameScene: SKScene {
                                 }
                             }
                         } else {
-                            // Alignment gate: nose within 15° of intercept, within 600px
                             let oppDist = hypot(dart.node.position.x - needle.node.position.x,
                                                 dart.node.position.y - needle.node.position.y)
                             if oppDist > 600 {
@@ -3273,7 +3327,6 @@ final class GameScene: SKScene {
             // MARK: Wedge AI thrust + fire
             if wedgeAIEnabled && !dart.node.isHidden {
                 if wedgeAIIntelligence == 3 {
-                    // Thrust already set by neural AI rotation block above; just sync bookkeeping.
                     wedgeAIThrustOn = isThrustingDart
                     wedgeAINextThrustToggle = currentTime + 0.1
                 } else if wedgeAIIntelligence >= 2 {
@@ -3308,7 +3361,6 @@ final class GameScene: SKScene {
                     isThrustingDart = wedgeAIThrustOn
                 }
 
-                // Certainty fire: check every frame with short cooldown.
                 if wedgeAIIntelligence >= 2 && wedgeAIIntelligence < 3 && !wedgeCollisionBrake && !wedgeEvasion
                     && !needle.node.isHidden && (currentTime - needleVisibleSince) >= 1.0
                     && currentTime >= wedgeCertainFireCooldown
@@ -3392,7 +3444,9 @@ final class GameScene: SKScene {
                 needle.applyThrust(accel: thrustAcceleration, dt: CGFloat(dt)); needle.flame.alpha = 1
             } else { needle.flame.alpha = 0 }
 
-        } // end else (normal play)
+        } // end do (normal play + game-over exhibition)
+
+        } // end delay guard (!gameOver || past animation start)
 
         // Gravity
         if sunEnabled, let sun = sunNode {
@@ -3436,9 +3490,6 @@ final class GameScene: SKScene {
             needleObservedAcceleration = CGVector(
                 dx: (needle.velocity.dx - needlePreviousVelocity.dx) / CGFloat(dt),
                 dy: (needle.velocity.dy - needlePreviousVelocity.dy) / CGFloat(dt))
-            // EMA-smoothed acceleration for aim prediction — α=0.08 ≈ 12-frame average.
-            // Eliminates per-frame thrust-toggle noise that causes level3AimPoint to return
-            // wildly incorrect intercept points.
             let α: CGFloat = 0.08
             dartSmoothedAcceleration = CGVector(
                 dx: dartSmoothedAcceleration.dx + α * (dartObservedAcceleration.dx - dartSmoothedAcceleration.dx),
@@ -3524,8 +3575,6 @@ final class GameScene: SKScene {
                     self.wreckPieceCount.setObject(NSNumber(value: newCount), forKey: owner)
                     if newCount == 0 {
                         self.enableRandomRespawn = true
-                        // FIX #8 — only respawn if enough time has passed for pre-death
-                        //          bullets to have expired; otherwise schedule for later.
                         let bulletLife = self.bulletLifeSeconds
                         let destroyTime = (owner === self.needle.node)
                             ? self.needleDestroyTime : self.dartDestroyTime
@@ -3565,14 +3614,16 @@ final class GameScene: SKScene {
                 let dx = needle.node.position.x - sun.position.x
                 let dy = needle.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    dartScore += 1; updateScoreDisplays(); explodeShip(ship: needle)
+                    if !gameOver { dartScore += 1; updateScoreDisplays() }
+                    explodeShip(ship: needle)
                 }
             }
             if !dart.node.isHidden {
                 let dx = dart.node.position.x - sun.position.x
                 let dy = dart.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    needleScore += 1; updateScoreDisplays(); explodeShip(ship: dart)
+                    if !gameOver { needleScore += 1; updateScoreDisplays() }
+                    explodeShip(ship: dart)
                 }
             }
         }
@@ -3591,10 +3642,10 @@ final class GameScene: SKScene {
                 dartHit = true; node.removeFromParent()
             }
         }
-        if needleHit { dartScore += 1; updateScoreDisplays(); dartKillTime = currentTime; explodeShip(ship: needle) }
-        if dartHit   { needleScore += 1; updateScoreDisplays(); needleKillTime = currentTime; explodeShip(ship: dart) }
+        if needleHit { if !gameOver { dartScore += 1; updateScoreDisplays() }; dartKillTime = currentTime; explodeShip(ship: needle) }
+        if dartHit   { if !gameOver { needleScore += 1; updateScoreDisplays() }; needleKillTime = currentTime; explodeShip(ship: dart) }
         if !needle.node.isHidden && !dart.node.isHidden && needle.node.frame.intersects(dart.node.frame) {
-            needleScore += 1; dartScore += 1; updateScoreDisplays()
+            if !gameOver { needleScore += 1; dartScore += 1; updateScoreDisplays() }
             explodeShip(ship: needle); explodeShip(ship: dart)
         }
 
@@ -3624,6 +3675,10 @@ final class GameScene: SKScene {
                     setOptionsTab(.ships); handled = true
                 } else if let tab = aboutTabButton, tab.contains(locInOverlay) {
                     setOptionsTab(.about); handled = true
+                } else if let tab = shipSelectionTabButton, tab.contains(locInOverlay) {
+                    setOptionsTab(.shipSelection); handled = true
+                } else if let tab = networkTabButton, tab.contains(locInOverlay) {
+                    setOptionsTab(.network); handled = true
                 } else if let btn = aimPersistToggleButton, btn.contains(locInOverlay) {
                     aimPersistsAfterLift.toggle(); refreshOptionsUI(); handled = true
                 }
@@ -3646,14 +3701,12 @@ final class GameScene: SKScene {
                 } else if let btn = bulletGravToggleButton, btn.contains(locInOverlay), sunEnabled {
                     sunAffectsBullets.toggle(); refreshOptionsUI(); handled = true
                 } else if let btn = overlay.childNode(withName: "game_new_match") as? SKShapeNode, btn.contains(locInOverlay) {
-                    // Invert button appearance while pressed
                     btn.fillColor = .white; btn.strokeColor = .white
                     btn.children.compactMap { $0 as? SKLabelNode }.forEach { $0.fontColor = .black }
                     newMatchButtonTouch = touch
                     handled = true
                 }
 
-                // Slider taps — move one notch toward tap position; begin drag
                 if !handled && touchIsOnSlider(track: needleBulletSliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .ships {
                     let kx = -sliderTrackHalfWidth + CGFloat(needleBulletLimitSelection) * (sliderTrackWidth / CGFloat(bulletSliderSteps))
                     if locInOverlay.x < kx - 5 {
@@ -3706,14 +3759,6 @@ final class GameScene: SKScene {
                         gravitySliderSelection = min(gravitySliderSteps, gravitySliderSelection + 1)
                     }
                     draggingGravitySliderTouch = touch; refreshOptionsUI(); handled = true
-                } else if !handled && touchIsOnSlider(track: bulletLifeSliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .ships {
-                    let kx = -sliderTrackHalfWidth + CGFloat(bulletLifeSliderSelection) * (sliderTrackWidth / CGFloat(bulletLifeSliderSteps))
-                    if locInOverlay.x < kx - 5 {
-                        bulletLifeSliderSelection = max(0, bulletLifeSliderSelection - 1)
-                    } else if locInOverlay.x > kx + 5 {
-                        bulletLifeSliderSelection = min(bulletLifeSliderSteps, bulletLifeSliderSelection + 1)
-                    }
-                    draggingBulletLifeSliderTouch = touch; refreshOptionsUI(); handled = true
                 }
 
                 if handled { continue }
@@ -3739,7 +3784,6 @@ final class GameScene: SKScene {
                 consumed = true
             }
 
-            // FIX #2 — needle thrust was missing from touchesBegan (only handled in Moved)
             #if DEBUG
             if !needleAIEnabled, let leftThrust = leftThrustButton, !leftThrust.isHidden,
                leftThrust.contains(location) {
@@ -3809,12 +3853,6 @@ final class GameScene: SKScene {
                     if gravitySliderSelection != idx { gravitySliderSelection = idx; refreshOptionsUI() }
                     continue
                 }
-                if draggingBulletLifeSliderTouch == touch {
-                    let step = sliderTrackWidth / CGFloat(bulletLifeSliderSteps)
-                    let idx = max(0, min(bulletLifeSliderSteps, Int(round((locInOverlay.x + sliderTrackHalfWidth) / step))))
-                    if bulletLifeSliderSelection != idx { bulletLifeSliderSelection = idx; refreshOptionsUI() }
-                    continue
-                }
             }
 
             let location = touch.location(in: self)
@@ -3871,8 +3909,6 @@ final class GameScene: SKScene {
             if draggingWedgeAISliderTouch  == touch { draggingWedgeAISliderTouch  = nil }
             if draggingVirtualScreenSliderTouch == touch { draggingVirtualScreenSliderTouch = nil }
             if draggingGravitySliderTouch   == touch { draggingGravitySliderTouch   = nil }
-            if draggingBulletLifeSliderTouch == touch { draggingBulletLifeSliderTouch = nil }
-            // New Match button: restore appearance, fire action
             if newMatchButtonTouch == touch {
                 newMatchButtonTouch = nil
                 restoreNewMatchButton()
@@ -3919,7 +3955,6 @@ final class GameScene: SKScene {
             if draggingWedgeAISliderTouch  == touch { draggingWedgeAISliderTouch  = nil }
             if draggingVirtualScreenSliderTouch == touch { draggingVirtualScreenSliderTouch = nil }
             if draggingGravitySliderTouch   == touch { draggingGravitySliderTouch   = nil }
-            if draggingBulletLifeSliderTouch == touch { draggingBulletLifeSliderTouch = nil }
             if newMatchButtonTouch == touch { newMatchButtonTouch = nil; restoreNewMatchButton() }
             fireTouches.removeValue(forKey: ObjectIdentifier(touch))
             activeAimTouches.remove(touch)
