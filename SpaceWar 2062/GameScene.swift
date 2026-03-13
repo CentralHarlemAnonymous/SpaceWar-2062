@@ -9,19 +9,140 @@
 import SpriteKit
 import GameplayKit
 
+// MARK: - ShipProfile
+
+/// Static description of a ship type. All per-type constants live here;
+/// runtime state (position, velocity, …) stays on Ship.
+struct ShipProfile {
+    // Identity
+    let typeName:           String
+
+    // Appearance
+    let indicatorColor:     SKColor     // border arrow, distance labels, buttons
+    let shipColor:          SKColor     // stroke color of the live ship node
+    let shipPath:           CGPath      // canonical, unscaled path used to draw the ship
+    let muzzleY:            CGFloat     // y of the firing tip in ship-local coordinates
+    let headDotRadius:      CGFloat     // radius of the nose dot; 0 = no dot
+    let headDotY:           CGFloat     // y of the nose dot in ship-local coordinates
+
+    // Border direction indicator
+    let indicatorPath:      CGPath      // pre-scaled silhouette for the edge arrow
+    let indicatorLineWidth: CGFloat
+    let indicatorGlowWidth: CGFloat
+    let indicatorHasHeadDot: Bool       // whether the edge arrow shows a nose dot
+
+    // Physics
+    let maxSpeed:           CGFloat     // points/sec
+    let acceleration:       CGFloat     // points/sec²
+    let turnSpeed:          CGFloat     // radians/sec
+    let bulletSpeed:        CGFloat     // points/sec (must exceed maxSpeed)
+
+    // Gameplay
+    let minFireInterval:    TimeInterval // minimum seconds between shots
+    let startingBullets:    Int          // default bullet inventory (overridden by UI slider)
+    let armorFront:         Int          // hits to kill when struck from front (≥1)
+    let armorRear:          Int          // hits to kill when struck from rear  (≥1)
+
+    // MARK: Built-in profiles
+
+    static let needle: ShipProfile = {
+        // Ship body
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: -24))
+        path.addLine(to: CGPoint(x: 0, y: 18))
+        path.move(to: CGPoint(x: -3, y: -16)); path.addLine(to: CGPoint(x:  3, y: -16))
+        path.move(to: CGPoint(x: -3, y:  -8)); path.addLine(to: CGPoint(x:  3, y:  -8))
+        path.move(to: CGPoint(x: -4, y:   0)); path.addLine(to: CGPoint(x:  4, y:   0))
+        path.move(to: CGPoint(x: -3, y:   8)); path.addLine(to: CGPoint(x:  3, y:   8))
+
+        // Indicator silhouette at 50 % scale
+        let s: CGFloat = 0.50
+        let ip = CGMutablePath()
+        ip.move(to: CGPoint(x: 0,     y: -24*s)); ip.addLine(to: CGPoint(x:    0, y: 18*s))
+        ip.move(to: CGPoint(x: -3*s,  y: -16*s)); ip.addLine(to: CGPoint(x:  3*s, y: -16*s))
+        ip.move(to: CGPoint(x: -3*s,  y:  -8*s)); ip.addLine(to: CGPoint(x:  3*s, y:  -8*s))
+        ip.move(to: CGPoint(x: -4*s,  y:   0   )); ip.addLine(to: CGPoint(x:  4*s, y:   0))
+        ip.move(to: CGPoint(x: -3*s,  y:   8*s)); ip.addLine(to: CGPoint(x:  3*s, y:   8*s))
+
+        return ShipProfile(
+            typeName:            "needle",
+            indicatorColor:      SKColor(red: 0.9, green: 0.45, blue: 0.15, alpha: 1),
+            shipColor:           .white,
+            shipPath:            path,
+            muzzleY:             21,
+            headDotRadius:       8,
+            headDotY:            21,
+            indicatorPath:       ip,
+            indicatorLineWidth:  1.2,
+            indicatorGlowWidth:  1,
+            indicatorHasHeadDot: true,
+            maxSpeed:            400,
+            acceleration:        250,
+            turnSpeed:           .pi * 2,
+            bulletSpeed:         480,
+            minFireInterval:     0.15,
+            startingBullets:     40,
+            armorFront:          1,
+            armorRear:           1
+        )
+    }()
+
+    static let dart: ShipProfile = {
+        // Ship body
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: 16))
+        path.addLine(to: CGPoint(x:  14, y: -14))
+        path.addLine(to: CGPoint(x: 0,   y:  -6))
+        path.addLine(to: CGPoint(x: -14, y: -14))
+        path.addLine(to: CGPoint(x: 0,   y:  16))
+
+        // Indicator silhouette at 85 % scale
+        let s: CGFloat = 0.85
+        let ip = CGMutablePath()
+        ip.move(to: CGPoint(x: 0,      y:  16*s))
+        ip.addLine(to: CGPoint(x:  14*s, y: -14*s))
+        ip.addLine(to: CGPoint(x: 0,     y:  -6*s))
+        ip.addLine(to: CGPoint(x: -14*s, y: -14*s))
+        ip.addLine(to: CGPoint(x: 0,     y:  16*s))
+
+        return ShipProfile(
+            typeName:            "dart",
+            indicatorColor:      SKColor(red: 0.25, green: 0.6, blue: 1.0, alpha: 1),
+            shipColor:           .white,
+            shipPath:            path,
+            muzzleY:             16,
+            headDotRadius:       0,
+            headDotY:            0,
+            indicatorPath:       ip,
+            indicatorLineWidth:  1.8,
+            indicatorGlowWidth:  3,
+            indicatorHasHeadDot: false,
+            maxSpeed:            400,
+            acceleration:        250,
+            turnSpeed:           .pi * 2,
+            bulletSpeed:         480,
+            minFireInterval:     0.15,
+            startingBullets:     40,
+            armorFront:          1,
+            armorRear:           1
+        )
+    }()
+}
+
 // MARK: - Ship
 
 final class Ship {
     let node: SKShapeNode
     let flame: SKShapeNode
     var velocity: CGVector = .zero
-    var maxSpeed: CGFloat
     var spawnPosition: CGPoint
     let name: String
+    let profile: ShipProfile
 
-    init(name: String, path: CGPath, flame: SKShapeNode, spawn: CGPoint, maxSpeed: CGFloat) {
-        self.node = SKShapeNode(path: path)
-        self.node.strokeColor = .white
+    init(profile: ShipProfile, flame: SKShapeNode, spawn: CGPoint) {
+        self.profile = profile
+        self.node = SKShapeNode(path: profile.shipPath)
+        self.node.strokeColor = profile.shipColor
         self.node.lineWidth = 2
         self.node.glowWidth = 4
         self.node.zPosition = 1
@@ -31,25 +152,35 @@ final class Ship {
         self.node.addChild(flame)
 
         self.spawnPosition = spawn
-        self.maxSpeed = maxSpeed
-        self.name = name
-        self.node.name = name
+        self.name = profile.typeName
+        self.node.name = profile.typeName
         self.node.position = spawn
+
+        // Head dot (nose marker) — only for ships that have one
+        if profile.headDotRadius > 0 {
+            let dot = SKShapeNode(circleOfRadius: profile.headDotRadius)
+            dot.fillColor = .white
+            dot.strokeColor = .clear
+            dot.position = CGPoint(x: 0, y: profile.headDotY)
+            dot.zPosition = 3
+            dot.name = "needleHeadDot"
+            self.node.addChild(dot)
+        }
     }
 
     func clampSpeed() {
-        let s = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
-        if s > maxSpeed && s > 0 {
-            let k = maxSpeed / s
+        let spd = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
+        if spd > profile.maxSpeed && spd > 0 {
+            let k = profile.maxSpeed / spd
             velocity.dx *= k
             velocity.dy *= k
         }
     }
 
-    func applyThrust(accel: CGFloat, dt: CGFloat) {
+    func applyThrust(dt: CGFloat) {
         let ang = node.zRotation
-        velocity.dx += -accel * sin(ang) * dt
-        velocity.dy +=  accel * cos(ang) * dt
+        velocity.dx += -profile.acceleration * sin(ang) * dt
+        velocity.dy +=  profile.acceleration * cos(ang) * dt
     }
 
     func integrate(dt: CGFloat) {
@@ -320,17 +451,11 @@ final class GameScene: SKScene {
 
     // Aiming / rotation
     private var aimPoint: CGPoint?
-    private let rotationSpeed: CGFloat = .pi * 2
     private let aimEpsilon: CGFloat = 0.01
 
     // Two target indicators: needle = orange, dart/wedge = blue
     private var needleTargetIndicator: SKShapeNode!
     private var dartTargetIndicator: SKShapeNode!
-
-    // Physics
-    private let thrustAcceleration: CGFloat = 250
-    private var maxSpeedNeedle: CGFloat = 400
-    private var maxSpeedDart: CGFloat = 400
 
     private var rightThrustButton: SKShapeNode!
     #if DEBUG
@@ -353,7 +478,7 @@ final class GameScene: SKScene {
     private var fireTouches: [ObjectIdentifier: FireTouchInfo] = [:]
 
     private func muzzleOffset(for ship: Ship) -> CGPoint {
-        return (ship === needle) ? CGPoint(x: 0, y: 21) : CGPoint(x: 0, y: 16)
+        return CGPoint(x: 0, y: ship.profile.muzzleY)
     }
 
     private var missileOwner = NSMapTable<SKNode, SKShapeNode>(keyOptions: .weakMemory, valueOptions: .weakMemory)
@@ -445,8 +570,8 @@ final class GameScene: SKScene {
         let needleSpawn = CGPoint(x: size.width * 0.20, y: size.height * 0.5)
         let dartSpawn   = CGPoint(x: size.width * 0.80, y: size.height * 0.5)
 
-        needle = Ship(name: "needle", path: createNeedlePath(), flame: createFlameNode(), spawn: needleSpawn, maxSpeed: maxSpeedNeedle)
-        dart   = Ship(name: "dart",   path: createDartPath(),   flame: createFlameNode(), spawn: dartSpawn,   maxSpeed: maxSpeedDart)
+        needle = Ship(profile: .needle, flame: createFlameNode(), spawn: needleSpawn)
+        dart   = Ship(profile: .dart,   flame: createFlameNode(), spawn: dartSpawn)
 
         addChild(needle.node)
         addChild(dart.node)
@@ -455,35 +580,21 @@ final class GameScene: SKScene {
         needleVisibleSince = nowVisible
         dartVisibleSince = nowVisible
 
-        // Head dots
-        let needleHeadDot = SKShapeNode(circleOfRadius: 8)
-        needleHeadDot.fillColor = .white
-        needleHeadDot.strokeColor = .clear
-        needleHeadDot.position = CGPoint(x: 0, y: 21)
-        needleHeadDot.zPosition = 3
-        needle.node.addChild(needleHeadDot)
-
-        let dartHeadDot = SKShapeNode(circleOfRadius: 8)
-        dartHeadDot.fillColor = .white
-        dartHeadDot.strokeColor = .clear
-        dartHeadDot.position = CGPoint(x: 0, y: 16)
-        dartHeadDot.zPosition = 3
-        dart.node.addChild(dartHeadDot)
-        dartHeadDot.isHidden = true
-
         // Firing direction lines
+        let needleMuzzleY = needle.profile.muzzleY
         let needleFiringLinePath = CGMutablePath()
-        needleFiringLinePath.move(to: CGPoint(x: 0, y: 21))
-        needleFiringLinePath.addLine(to: CGPoint(x: 0, y: 41))
+        needleFiringLinePath.move(to: CGPoint(x: 0, y: needleMuzzleY))
+        needleFiringLinePath.addLine(to: CGPoint(x: 0, y: needleMuzzleY + 20))
         let needleFiringLine = SKShapeNode(path: needleFiringLinePath)
         needleFiringLine.strokeColor = .white
         needleFiringLine.lineWidth = 1
         needleFiringLine.zPosition = 2
         needle.node.addChild(needleFiringLine)
 
+        let dartMuzzleY = dart.profile.muzzleY
         let dartFiringLinePath = CGMutablePath()
-        dartFiringLinePath.move(to: CGPoint(x: 0, y: 16))
-        dartFiringLinePath.addLine(to: CGPoint(x: 0, y: 36))
+        dartFiringLinePath.move(to: CGPoint(x: 0, y: dartMuzzleY))
+        dartFiringLinePath.addLine(to: CGPoint(x: 0, y: dartMuzzleY + 20))
         let dartFiringLine = SKShapeNode(path: dartFiringLinePath)
         dartFiringLine.strokeColor = .white
         dartFiringLine.lineWidth = 1
@@ -740,27 +851,6 @@ final class GameScene: SKScene {
 
     // MARK: - Ship Shapes
 
-    private func createNeedlePath() -> CGPath {
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: -24))
-        path.addLine(to: CGPoint(x: 0, y: 18))
-        path.move(to: CGPoint(x: -3, y: -16)); path.addLine(to: CGPoint(x: 3, y: -16))
-        path.move(to: CGPoint(x: -3, y: -8));  path.addLine(to: CGPoint(x: 3, y: -8))
-        path.move(to: CGPoint(x: -4, y: 0));   path.addLine(to: CGPoint(x: 4, y: 0))
-        path.move(to: CGPoint(x: -3, y: 8));   path.addLine(to: CGPoint(x: 3, y: 8))
-        return path
-    }
-
-    private func createDartPath() -> CGPath {
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: 16))
-        path.addLine(to: CGPoint(x: 14, y: -14))
-        path.addLine(to: CGPoint(x: 0, y: -6))
-        path.addLine(to: CGPoint(x: -14, y: -14))
-        path.addLine(to: CGPoint(x: 0, y: 16))
-        return path
-    }
-
     private func createFlameNode() -> SKShapeNode {
         let path = CGMutablePath()
         path.move(to: CGPoint(x: 0, y: -18))
@@ -786,14 +876,15 @@ final class GameScene: SKScene {
         return angle
     }
 
-    private func rotateShip(_ shipNode: SKShapeNode, toward worldPoint: CGPoint, dt: TimeInterval) {
+    private func rotateShip(_ ship: Ship, toward worldPoint: CGPoint, dt: TimeInterval) {
+        let shipNode = ship.node
         let dx = worldPoint.x - shipNode.position.x
         let dy = worldPoint.y - shipNode.position.y
         let targetAngle = atan2(dy, dx) - .pi / 2
         let currentAngle = shipNode.zRotation
         let angleDiff = shortestAngleBetween(currentAngle, targetAngle)
         if abs(angleDiff) <= aimEpsilon { shipNode.zRotation = targetAngle; return }
-        let step = rotationSpeed * CGFloat(dt)
+        let step = ship.profile.turnSpeed * CGFloat(dt)
         if abs(angleDiff) <= step {
             shipNode.zRotation = targetAngle
         } else {
@@ -809,7 +900,7 @@ final class GameScene: SKScene {
         guard intelligence >= 1 else { return target.node.position }
 
         let origin    = shooter.node.position
-        let bulletSpeed: CGFloat = 480
+        let bulletSpeed = shooter.profile.bulletSpeed
         let targetPos = target.node.position
         let targetVel = target.velocity
         let acc = (target === dart) ? dartSmoothedAcceleration : needleSmoothedAcceleration
@@ -855,7 +946,7 @@ final class GameScene: SKScene {
     private func simulateBulletHitsSun(from ship: Ship, target: Ship? = nil) -> Bool {
         guard let sun = sunNode else { return false }
         let angle = ship.node.zRotation
-        let bulletSpeed: CGFloat = 480
+        let bulletSpeed = ship.profile.bulletSpeed
         var bx = ship.node.position.x, by = ship.node.position.y
         var bvx = -bulletSpeed * sin(angle), bvy = bulletSpeed * cos(angle)
         let simStep: CGFloat = 0.05
@@ -911,7 +1002,7 @@ final class GameScene: SKScene {
     /// Level-2 firing solution: quadratic prediction aimed at the nearest virtual
     /// copy of the target, with 15 iterations for accuracy.
     private func level3AimPoint(shooter: Ship, target: Ship) -> CGPoint {
-        let bulletSpeed: CGFloat = 480
+        let bulletSpeed = shooter.profile.bulletSpeed
         let origin = shooter.node.position
         var targetPos = target.node.position
         if edgeBehavior == .wrap {
@@ -1041,7 +1132,7 @@ final class GameScene: SKScene {
 
     private func bulletWillHit(shooter: Ship, target: Ship, hitRadius: CGFloat = 18) -> Bool {
         let angle = shooter.node.zRotation
-        let bulletSpeed: CGFloat = 480
+        let bulletSpeed = shooter.profile.bulletSpeed
         var bx = shooter.node.position.x, by = shooter.node.position.y
         var bvx = -bulletSpeed * sin(angle), bvy = bulletSpeed * cos(angle)
         let simStep: CGFloat = 0.05
@@ -1240,7 +1331,7 @@ final class GameScene: SKScene {
         missile.position = CGPoint(x: ship.node.position.x + dx, y: ship.node.position.y + dy)
         addChild(missile)
 
-        let velocityMagnitude: CGFloat = 480
+        let velocityMagnitude = ship.profile.bulletSpeed
         let vx = -velocityMagnitude * sin(angle)
         let vy =  velocityMagnitude * cos(angle)
         missile.userData = ["vx": vx, "vy": vy, "bounced": false]
@@ -1286,6 +1377,11 @@ final class GameScene: SKScene {
 
         ship.node.isHidden = true
         ship.velocity = .zero
+
+        // Dim the needle's head dot the instant it explodes so it doesn't pop
+        if ship === needle {
+            needle.node.childNode(withName: "needleHeadDot")?.alpha = 0
+        }
 
         // In game-over mode each respawn gets a fresh random AI level (0=basic, 1=predictive, 2=expert)
         if gameOver {
@@ -1894,66 +1990,52 @@ final class GameScene: SKScene {
         needleDirectionArrow?.removeFromParent()
         dartDirectionArrow?.removeFromParent()
         sunDirectionArrow?.removeFromParent()
-        needleDistanceLabel?.removeFromParent()   // PATCH 4a
+        needleDistanceLabel?.removeFromParent()
         dartDistanceLabel?.removeFromParent()
 
-        // Needle pointer: scaled-down silhouette, deliberately fainter than the live ship
-        // so it reads as a HUD indicator rather than a second ship on screen.
-        let needleColor = SKColor(red: 0.9, green: 0.45, blue: 0.15, alpha: 1)
-        let np = CGMutablePath()
-        let ns: CGFloat = 0.50   // 50 % of live-ship size (was 0.75)
-        np.move(to: CGPoint(x: 0,    y: -24*ns)); np.addLine(to: CGPoint(x: 0,    y: 18*ns))
-        np.move(to: CGPoint(x: -3*ns, y: -16*ns)); np.addLine(to: CGPoint(x: 3*ns, y: -16*ns))
-        np.move(to: CGPoint(x: -3*ns, y:  -8*ns)); np.addLine(to: CGPoint(x: 3*ns, y:  -8*ns))
-        np.move(to: CGPoint(x: -4*ns, y:   0*ns)); np.addLine(to: CGPoint(x: 4*ns, y:   0*ns))
-        np.move(to: CGPoint(x: -3*ns, y:   8*ns)); np.addLine(to: CGPoint(x: 3*ns, y:   8*ns))
-        let needlePtr = SKShapeNode(path: np)
-        needlePtr.strokeColor = needleColor; needlePtr.lineWidth = 1.2   // thinner stroke
-        needlePtr.glowWidth = 1; needlePtr.zPosition = 90; needlePtr.alpha = 0  // no glow
-        needlePtr.name = "dirArrow"; addChild(needlePtr)
-        needleDirectionArrow = needlePtr
+        // Build the edge arrow for each ship from its profile
+        func makeShipArrow(for ship: Ship, distLabel: inout SKLabelNode?) -> SKShapeNode {
+            let p = ship.profile
+            let ptr = SKShapeNode(path: p.indicatorPath)
+            ptr.strokeColor = p.indicatorColor; ptr.fillColor = .clear
+            ptr.lineWidth = p.indicatorLineWidth
+            ptr.glowWidth = p.indicatorGlowWidth
+            ptr.alpha = 0; ptr.zPosition = 90; ptr.name = "dirArrow"
+            addChild(ptr)
 
-        // PATCH 4b — Head dot at the nose so the opponent can read facing direction.
-        // Child of the arrow so it rotates automatically with it each frame.
-        let arrowHeadDot = SKShapeNode(circleOfRadius: 8 * ns)
-        arrowHeadDot.fillColor = needleColor; arrowHeadDot.strokeColor = .clear
-        arrowHeadDot.position = CGPoint(x: 0, y: 21 * ns)   // mirrors live needleHeadDot y=21
-        arrowHeadDot.zPosition = 1
-        needlePtr.addChild(arrowHeadDot)
+            if p.indicatorHasHeadDot && p.headDotRadius > 0 {
+                // The indicator path is at the same scale as the indicator itself,
+                // so we scale the dot radius and position to match (profile uses 0.50 for needle)
+                // The path already encodes the scale, so read the dot Y from the indicator scale.
+                // For the needle, indicatorPath is at 0.50 × ship, so dot Y = headDotY × 0.50.
+                // We derive that scale factor as headDotY-in-indicator / headDotY-in-ship.
+                // Since both are baked into the profile, use the ratio of indicatorPath extent.
+                // Simplest: hardcode the indicator scale factor in the profile —
+                // but we don't store it. Use the existing needle headDotY and known ns=0.50.
+                let indicatorScale: CGFloat = 0.50   // matches the ns used in needle's indicatorPath
+                let dot = SKShapeNode(circleOfRadius: p.headDotRadius * indicatorScale)
+                dot.fillColor = p.indicatorColor; dot.strokeColor = .clear
+                dot.position = CGPoint(x: 0, y: p.headDotY * indicatorScale)
+                dot.zPosition = 1
+                ptr.addChild(dot)
+            }
 
-        // PATCH 4b — Floating distance-to-wedge label.
-        // Sibling (not child) so text stays upright regardless of arrow rotation.
-        let distLabel = SKLabelNode(text: "")
-        distLabel.fontName = "AvenirNext-Bold"; distLabel.fontSize = 12
-        distLabel.fontColor = needleColor
-        distLabel.horizontalAlignmentMode = .left; distLabel.verticalAlignmentMode = .center
-        distLabel.zPosition = 91; distLabel.alpha = 0; distLabel.name = "needleDistLabel"
-        addChild(distLabel); needleDistanceLabel = distLabel
+            let lbl = SKLabelNode(text: "")
+            lbl.fontName = "AvenirNext-Bold"; lbl.fontSize = 12
+            lbl.fontColor = p.indicatorColor
+            lbl.horizontalAlignmentMode = .left; lbl.verticalAlignmentMode = .center
+            lbl.zPosition = 91; lbl.alpha = 0
+            addChild(lbl)
+            distLabel = lbl
+            return ptr
+        }
 
-        // Dart pointer: the actual dart silhouette scaled to 0.85x, blue
-        let dartColor = SKColor(red: 0.25, green: 0.6, blue: 1.0, alpha: 1)
-        let dp = CGMutablePath()
-        let ds: CGFloat = 0.85
-        dp.move(to: CGPoint(x: 0,      y:  16*ds))
-        dp.addLine(to: CGPoint(x:  14*ds, y: -14*ds))
-        dp.addLine(to: CGPoint(x: 0,      y:  -6*ds))
-        dp.addLine(to: CGPoint(x: -14*ds, y: -14*ds))
-        dp.addLine(to: CGPoint(x: 0,      y:  16*ds))
-        let dartPtr = SKShapeNode(path: dp)
-        dartPtr.strokeColor = dartColor; dartPtr.fillColor = .clear; dartPtr.lineWidth = 1.8
-        dartPtr.glowWidth = 3; dartPtr.zPosition = 90; dartPtr.alpha = 0
-        dartPtr.name = "dirArrow"; addChild(dartPtr)
-        dartDirectionArrow = dartPtr
+        needleDirectionArrow = makeShipArrow(for: needle, distLabel: &needleDistanceLabel)
+        needleDistanceLabel?.name = "needleDistLabel"
+        dartDirectionArrow   = makeShipArrow(for: dart,   distLabel: &dartDistanceLabel)
+        dartDistanceLabel?.name   = "dartDistLabel"
 
-        // Distance label beside the dart/wedge edge arrow — shown when needle is played manually
-        let dartDistLabel = SKLabelNode(text: "")
-        dartDistLabel.fontName = "AvenirNext-Bold"; dartDistLabel.fontSize = 12
-        dartDistLabel.fontColor = dartColor
-        dartDistLabel.horizontalAlignmentMode = .left; dartDistLabel.verticalAlignmentMode = .center
-        dartDistLabel.zPosition = 91; dartDistLabel.alpha = 0; dartDistLabel.name = "dartDistLabel"
-        addChild(dartDistLabel); dartDistanceLabel = dartDistLabel
-
-        // Sun pointer: starburst symbol
+        // Sun pointer: starburst symbol (unchanged)
         let sunColor = SKColor(red: 1.0, green: 0.85, blue: 0.2, alpha: 1)
         let sunPtr = SKShapeNode(circleOfRadius: 5)
         sunPtr.fillColor = .clear; sunPtr.strokeColor = sunColor
@@ -2318,13 +2400,47 @@ final class GameScene: SKScene {
         overlay.addChild(gravityGroup)
 
         // MARK: Ships/Controls tab content
-        let aiSectionHeaderY: CGFloat = 123
-        let needleAITrackY:   CGFloat = 98
-        let wedgeAITrackY:    CGFloat = 58
-        let bulletsSectionY:  CGFloat = 23
-        let bulletsY:         CGFloat = -4
-        let bulletLifeY:      CGFloat = -92
-        let bulletButtonsY:   CGFloat = -122
+        // AI on/off toggles (moved from Gameplay tab)
+        let aiToggleHeaderY: CGFloat = 110
+        let needleAIToggleY: CGFloat = 83
+        let wedgeAIToggleY:  CGFloat = 53
+
+        let aiToggleHeader = makeLabel("AI On/Off", y: aiToggleHeaderY, name: "ships_label_ai_toggle_title")
+        overlay.addChild(aiToggleHeader)
+
+        let needleAIToggleLabel = SKLabelNode(text: "Needle")
+        needleAIToggleLabel.fontName = "AvenirNext-Bold"; needleAIToggleLabel.fontSize = 16
+        needleAIToggleLabel.fontColor = .white; needleAIToggleLabel.horizontalAlignmentMode = .left
+        needleAIToggleLabel.verticalAlignmentMode = .center
+        needleAIToggleLabel.position = CGPoint(x: -w/2 + 20, y: needleAIToggleY)
+        needleAIToggleLabel.name = "ships_label_ai_toggle_needle"; needleAIToggleLabel.zPosition = 202
+        overlay.addChild(needleAIToggleLabel)
+
+        let aiBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
+        aiBtn.name = "game_ai_toggle"; aiBtn.position = CGPoint(x: 0, y: needleAIToggleY)
+        aiBtn.strokeColor = .white; aiBtn.lineWidth = 2; aiBtn.zPosition = 202
+        overlay.addChild(aiBtn); aiToggleButton = aiBtn
+
+        let wedgeAIToggleLabel = SKLabelNode(text: "Wedge")
+        wedgeAIToggleLabel.fontName = "AvenirNext-Bold"; wedgeAIToggleLabel.fontSize = 16
+        wedgeAIToggleLabel.fontColor = .white; wedgeAIToggleLabel.horizontalAlignmentMode = .left
+        wedgeAIToggleLabel.verticalAlignmentMode = .center
+        wedgeAIToggleLabel.position = CGPoint(x: -w/2 + 20, y: wedgeAIToggleY)
+        wedgeAIToggleLabel.name = "ships_label_ai_toggle_wedge"; wedgeAIToggleLabel.zPosition = 202
+        overlay.addChild(wedgeAIToggleLabel)
+
+        let wedgeAIBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
+        wedgeAIBtn.name = "game_wedge_ai_toggle"; wedgeAIBtn.position = CGPoint(x: 0, y: wedgeAIToggleY)
+        wedgeAIBtn.strokeColor = .white; wedgeAIBtn.lineWidth = 2; wedgeAIBtn.zPosition = 202
+        overlay.addChild(wedgeAIBtn); wedgeAIToggleButton = wedgeAIBtn
+
+        let aiSectionHeaderY: CGFloat = -10 // started at 20
+        let needleAITrackY:   CGFloat = -35
+        let wedgeAITrackY:    CGFloat = -75
+        let bulletsSectionY:  CGFloat = -130
+        let bulletsY:         CGFloat = -155
+        //let bulletLifeY:      CGFloat = -172
+        //let bulletButtonsY:   CGFloat = -202
 
         let aiSectionTitle = makeLabel("AI Intelligence", y: aiSectionHeaderY, name: "ships_label_ai_intelligence_title")
         overlay.addChild(aiSectionTitle)
@@ -2459,39 +2575,23 @@ final class GameScene: SKScene {
 
         // MARK: Gameplay tab content
         let newMatchBtn = SKShapeNode(rectOf: CGSize(width: 140, height: 36), cornerRadius: 8)
-        newMatchBtn.name = "game_new_match"; newMatchBtn.position = CGPoint(x: 0, y: h/2 - 112)
+        newMatchBtn.name = "game_new_match"; newMatchBtn.position = CGPoint(x: 0, y: h/2 - 162) // more negative means farther down
         newMatchBtn.fillColor = .clear; newMatchBtn.strokeColor = .white; newMatchBtn.lineWidth = 2
         newMatchBtn.zPosition = 202; overlay.addChild(newMatchBtn)
         newMatchBtn.addChild(makeTabInnerLabel("New Match", fontSize: 16))
 
-        let aimLabel = makeLabel("Aim Persists:", y: h/2 - 177, name: "game_label_aim_persist")
+        let aimLabel = makeLabel("Aim Persists:", y: h/2 - 235, name: "game_label_aim_persist")
         overlay.addChild(aimLabel)
 
         let aimBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        aimBtn.name = "game_aim_persist_toggle"; aimBtn.position = CGPoint(x: 0, y: h/2 - 207)
+        aimBtn.name = "game_aim_persist_toggle"; aimBtn.position = CGPoint(x: 0, y: h/2 - 260)
         aimBtn.strokeColor = .white; aimBtn.lineWidth = 2; aimBtn.zPosition = 202
         overlay.addChild(aimBtn); aimPersistToggleButton = aimBtn
 
-        let aiLabel = makeLabel("Needle AI:", y: h/2 - 257, name: "game_label_needle_ai")
-        overlay.addChild(aiLabel)
-
-        let aiBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        aiBtn.name = "game_ai_toggle"; aiBtn.position = CGPoint(x: 0, y: h/2 - 287)
-        aiBtn.strokeColor = .white; aiBtn.lineWidth = 2; aiBtn.zPosition = 202
-        overlay.addChild(aiBtn); aiToggleButton = aiBtn
-
-        let wedgeAILabel = makeLabel("Wedge AI:", y: h/2 - 337, name: "game_label_wedge_ai")
-        overlay.addChild(wedgeAILabel)
-
-        let wedgeAIBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
-        wedgeAIBtn.name = "game_wedge_ai_toggle"; wedgeAIBtn.position = CGPoint(x: 0, y: h/2 - 367)
-        wedgeAIBtn.strokeColor = .white; wedgeAIBtn.lineWidth = 2; wedgeAIBtn.zPosition = 202
-        overlay.addChild(wedgeAIBtn); wedgeAIToggleButton = wedgeAIBtn
-
-        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 400, name: "game_label_virtual_screen")
+        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 320, name: "game_label_virtual_screen")
         overlay.addChild(vsLabel)
 
-        let vsTrackY: CGFloat = h/2 - 427
+        let vsTrackY: CGFloat = h/2 - 342
         let vsTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
         vsTrack.strokeColor = .white; vsTrack.fillColor = .white; vsTrack.alpha = 1.0
         vsTrack.position = CGPoint(x: 0, y: vsTrackY)
@@ -2591,10 +2691,13 @@ final class GameScene: SKScene {
         }
 
         let gamePrefixes  = ["game_"]
+        // AI toggle buttons live in Controls tab despite having game_ prefix
+        let gameExclusions = ["game_ai_toggle", "game_wedge_ai_toggle"]
         let envPrefixes   = ["opt_edge_", "opt_sun_toggle", "opt_bullet_grav_toggle",
                              "opt_grav_", "env_label_", "env_gravity_group"]
         let shipsPrefixes = ["ships_label_",
-                             "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_"]
+                             "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_",
+                             "game_ai_toggle", "game_wedge_ai_toggle"]
 
         optionsOverlay?.children.forEach { node in
             if node.name == "options_bg" { return }
@@ -2606,7 +2709,7 @@ final class GameScene: SKScene {
             switch currentOptionsTab {
             case .environment:   node.isHidden = !envPrefixes.contains(where: { name.hasPrefix($0) })
             case .ships:         node.isHidden = !shipsPrefixes.contains(where: { name.hasPrefix($0) })
-            case .game:          node.isHidden = !gamePrefixes.contains(where: { name.hasPrefix($0) })
+            case .game:          node.isHidden = gameExclusions.contains(name) || !gamePrefixes.contains(where: { name.hasPrefix($0) })
             case .about, .shipSelection, .network: node.isHidden = true
             }
         }
@@ -2797,6 +2900,7 @@ final class GameScene: SKScene {
         else { pos = ship.spawnPosition }
         ship.node.position = pos; ship.node.zRotation = 0
         ship.velocity = .zero; ship.node.isHidden = false
+        if ship === needle { needle.node.childNode(withName: "needleHeadDot")?.alpha = 1 }
     }
 
     // MARK: - Update loop
@@ -2903,16 +3007,16 @@ final class GameScene: SKScene {
 
                         if shouldAvoidSun {
                             let awayPoint = CGPoint(x: needle.node.position.x - dxs, y: needle.node.position.y - dys)
-                            rotateShip(needle.node, toward: awayPoint, dt: dt)
+                            rotateShip(needle, toward: awayPoint, dt: dt)
                             needleAimTarget = awayPoint
                             needleEvasion = true
                         } else if needleHuntingUnarmed {
                             let aimPt = huntAimPoint(shooter: needle, target: dart)
-                            rotateShip(needle.node, toward: aimPt, dt: dt)
+                            rotateShip(needle, toward: aimPt, dt: dt)
                             needleAimTarget = aimPt
                         } else if needleCollisionBrake {
                             let avoidPt = collisionAvoidancePoint(for: needle, opponent: dart)
-                            rotateShip(needle.node, toward: avoidPt, dt: dt)
+                            rotateShip(needle, toward: avoidPt, dt: dt)
                             needleAimTarget = avoidPt
                         } else {
                             if needleAIIntelligence >= 2 {
@@ -2925,7 +3029,7 @@ final class GameScene: SKScene {
                                     aimTarget = inDanger ? awayPoint
                                                          : strategicPositionTarget(for: needle, opponent: dart, pursueBehind: dartBulletsRemaining > 0)
                                 }
-                                rotateShip(needle.node, toward: aimTarget, dt: dt)
+                                rotateShip(needle, toward: aimTarget, dt: dt)
                                 needleAimTarget = aimTarget
                             } else {
                                 var nearestMissilePos = CGPoint.zero
@@ -2941,7 +3045,7 @@ final class GameScene: SKScene {
                                     let awayPoint = CGPoint(
                                         x: needle.node.position.x - (nearestMissilePos.x - needle.node.position.x),
                                         y: needle.node.position.y - (nearestMissilePos.y - needle.node.position.y))
-                                    rotateShip(needle.node, toward: awayPoint, dt: dt)
+                                    rotateShip(needle, toward: awayPoint, dt: dt)
                                     needleAimTarget = awayPoint
                                 } else if !dart.node.isHidden {
                                     let dxw = dart.node.position.x - needle.node.position.x
@@ -2949,16 +3053,16 @@ final class GameScene: SKScene {
                                     let d2w = dxw*dxw + dyw*dyw
                                     if d2w < 90*90 {
                                         let awayPoint = CGPoint(x: needle.node.position.x - dxw, y: needle.node.position.y - dyw)
-                                        rotateShip(needle.node, toward: awayPoint, dt: dt)
+                                        rotateShip(needle, toward: awayPoint, dt: dt)
                                         needleAimTarget = awayPoint
                                     } else {
                                         let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                        rotateShip(needle.node, toward: t, dt: dt)
+                                        rotateShip(needle, toward: t, dt: dt)
                                         needleAimTarget = t
                                     }
                                 } else {
                                     let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                    rotateShip(needle.node, toward: t, dt: dt)
+                                    rotateShip(needle, toward: t, dt: dt)
                                     needleAimTarget = t
                                 }
                             }
@@ -2972,11 +3076,11 @@ final class GameScene: SKScene {
 
                         if needleHuntingUnarmed {
                             let aimPt = huntAimPoint(shooter: needle, target: dart)
-                            rotateShip(needle.node, toward: aimPt, dt: dt)
+                            rotateShip(needle, toward: aimPt, dt: dt)
                             needleAimTarget = aimPt
                         } else if needleCollisionBrake {
                             let avoidPt = collisionAvoidancePoint(for: needle, opponent: dart)
-                            rotateShip(needle.node, toward: avoidPt, dt: dt)
+                            rotateShip(needle, toward: avoidPt, dt: dt)
                             needleAimTarget = avoidPt
                         } else if needleAIIntelligence >= 2 {
                             let aimTarget: CGPoint
@@ -2988,7 +3092,7 @@ final class GameScene: SKScene {
                                 aimTarget = inDanger ? awayPoint
                                                      : strategicPositionTarget(for: needle, opponent: dart, pursueBehind: dartBulletsRemaining > 0)
                             }
-                            rotateShip(needle.node, toward: aimTarget, dt: dt)
+                            rotateShip(needle, toward: aimTarget, dt: dt)
                             needleAimTarget = aimTarget
                         } else {
                             var nearestMissilePos = CGPoint.zero
@@ -3004,17 +3108,17 @@ final class GameScene: SKScene {
                                 let awayPoint = CGPoint(
                                     x: needle.node.position.x - (nearestMissilePos.x - needle.node.position.x),
                                     y: needle.node.position.y - (nearestMissilePos.y - needle.node.position.y))
-                                rotateShip(needle.node, toward: awayPoint, dt: dt)
+                                rotateShip(needle, toward: awayPoint, dt: dt)
                                 needleAimTarget = awayPoint
                             } else {
                                 let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                rotateShip(needle.node, toward: t, dt: dt)
+                                rotateShip(needle, toward: t, dt: dt)
                                 needleAimTarget = t
                             }
                         }
                     }
                 } else if let p = aimPoint {
-                    rotateShip(needle.node, toward: p, dt: dt)
+                    rotateShip(needle, toward: p, dt: dt)
                     needleAimTarget = p
                 }
             }
@@ -3052,7 +3156,7 @@ final class GameScene: SKScene {
                         )
 
                         if action.rotate != 0 {
-                            dart.node.zRotation += CGFloat(action.rotate) * rotationSpeed * CGFloat(dt)
+                            dart.node.zRotation += CGFloat(action.rotate) * dart.profile.turnSpeed * CGFloat(dt)
                         }
                         isThrustingDart = action.thrust
                         if action.fire && currentTime >= wedgeAINextFireTime {
@@ -3090,16 +3194,16 @@ final class GameScene: SKScene {
 
                         if shouldAvoidSun {
                             let awayPoint = CGPoint(x: dart.node.position.x - dxs, y: dart.node.position.y - dys)
-                            rotateShip(dart.node, toward: awayPoint, dt: dt)
+                            rotateShip(dart, toward: awayPoint, dt: dt)
                             dartAimTarget = awayPoint
                             wedgeEvasion = true
                         } else if wedgeHuntingUnarmed {
                             let aimPt = huntAimPoint(shooter: dart, target: needle)
-                            rotateShip(dart.node, toward: aimPt, dt: dt)
+                            rotateShip(dart, toward: aimPt, dt: dt)
                             dartAimTarget = aimPt
                         } else if wedgeCollisionBrake {
                             let avoidPt = collisionAvoidancePoint(for: dart, opponent: needle)
-                            rotateShip(dart.node, toward: avoidPt, dt: dt)
+                            rotateShip(dart, toward: avoidPt, dt: dt)
                             dartAimTarget = avoidPt
                         } else {
                             if wedgeAIIntelligence >= 2 {
@@ -3112,7 +3216,7 @@ final class GameScene: SKScene {
                                     aimTarget = inDanger ? awayPoint
                                                          : strategicPositionTarget(for: dart, opponent: needle, pursueBehind: needleBulletsRemaining > 0)
                                 }
-                                rotateShip(dart.node, toward: aimTarget, dt: dt)
+                                rotateShip(dart, toward: aimTarget, dt: dt)
                                 dartAimTarget = aimTarget
                             } else {
                                 var nearestMissilePos = CGPoint.zero
@@ -3128,7 +3232,7 @@ final class GameScene: SKScene {
                                     let awayPoint = CGPoint(
                                         x: dart.node.position.x - (nearestMissilePos.x - dart.node.position.x),
                                         y: dart.node.position.y - (nearestMissilePos.y - dart.node.position.y))
-                                    rotateShip(dart.node, toward: awayPoint, dt: dt)
+                                    rotateShip(dart, toward: awayPoint, dt: dt)
                                     dartAimTarget = awayPoint
                                 } else if !needle.node.isHidden {
                                     let dxn = needle.node.position.x - dart.node.position.x
@@ -3136,16 +3240,16 @@ final class GameScene: SKScene {
                                     let d2n = dxn*dxn + dyn*dyn
                                     if d2n < 90*90 {
                                         let awayPoint = CGPoint(x: dart.node.position.x - dxn, y: dart.node.position.y - dyn)
-                                        rotateShip(dart.node, toward: awayPoint, dt: dt)
+                                        rotateShip(dart, toward: awayPoint, dt: dt)
                                         dartAimTarget = awayPoint
                                     } else {
                                         let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                        rotateShip(dart.node, toward: t, dt: dt)
+                                        rotateShip(dart, toward: t, dt: dt)
                                         dartAimTarget = t
                                     }
                                 } else {
                                     let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                    rotateShip(dart.node, toward: t, dt: dt)
+                                    rotateShip(dart, toward: t, dt: dt)
                                     dartAimTarget = t
                                 }
                             }
@@ -3159,11 +3263,11 @@ final class GameScene: SKScene {
 
                         if wedgeHuntingUnarmed {
                             let aimPt = huntAimPoint(shooter: dart, target: needle)
-                            rotateShip(dart.node, toward: aimPt, dt: dt)
+                            rotateShip(dart, toward: aimPt, dt: dt)
                             dartAimTarget = aimPt
                         } else if wedgeCollisionBrake {
                             let avoidPt = collisionAvoidancePoint(for: dart, opponent: needle)
-                            rotateShip(dart.node, toward: avoidPt, dt: dt)
+                            rotateShip(dart, toward: avoidPt, dt: dt)
                             dartAimTarget = avoidPt
                         } else if wedgeAIIntelligence >= 2 {
                             let aimTarget: CGPoint
@@ -3175,7 +3279,7 @@ final class GameScene: SKScene {
                                 aimTarget = inDanger ? awayPoint
                                                      : strategicPositionTarget(for: dart, opponent: needle, pursueBehind: needleBulletsRemaining > 0)
                             }
-                            rotateShip(dart.node, toward: aimTarget, dt: dt)
+                            rotateShip(dart, toward: aimTarget, dt: dt)
                             dartAimTarget = aimTarget
                         } else {
                             var nearestMissilePos = CGPoint.zero
@@ -3191,17 +3295,17 @@ final class GameScene: SKScene {
                                 let awayPoint = CGPoint(
                                     x: dart.node.position.x - (nearestMissilePos.x - dart.node.position.x),
                                     y: dart.node.position.y - (nearestMissilePos.y - dart.node.position.y))
-                                rotateShip(dart.node, toward: awayPoint, dt: dt)
+                                rotateShip(dart, toward: awayPoint, dt: dt)
                                 dartAimTarget = awayPoint
                             } else {
                                 let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                rotateShip(dart.node, toward: t, dt: dt)
+                                rotateShip(dart, toward: t, dt: dt)
                                 dartAimTarget = t
                             }
                         }
                     }
                 } else if let p = aimPoint {
-                    rotateShip(dart.node, toward: p, dt: dt)
+                    rotateShip(dart, toward: p, dt: dt)
                     dartAimTarget = p
                 }
             }
@@ -3437,11 +3541,11 @@ final class GameScene: SKScene {
             }
 
             if isThrustingDart {
-                dart.applyThrust(accel: thrustAcceleration, dt: CGFloat(dt)); dart.flame.alpha = 1
+                dart.applyThrust(dt: CGFloat(dt)); dart.flame.alpha = 1
             } else { dart.flame.alpha = 0 }
 
             if isThrustingNeedle {
-                needle.applyThrust(accel: thrustAcceleration, dt: CGFloat(dt)); needle.flame.alpha = 1
+                needle.applyThrust(dt: CGFloat(dt)); needle.flame.alpha = 1
             } else { needle.flame.alpha = 0 }
 
         } // end do (normal play + game-over exhibition)
