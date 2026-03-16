@@ -197,5 +197,6 @@ final class Ship {
         node.position = spawnPosition
         node.zRotation = 0
         velocity = .zero
+        node.isHidden = false
     }
 }
