@@ -339,10 +339,6 @@ final class GameScene: SKScene {
     }
     var fireTouches: [ObjectIdentifier: FireTouchInfo] = [:]
 
-    private func muzzleOffset(for ship: Ship) -> CGPoint {
-        return CGPoint(x: 0, y: ship.profile.muzzleY)
-    }
-
     var missileOwner = NSMapTable<SKNode, SKShapeNode>(keyOptions: .weakMemory, valueOptions: .weakMemory)
     var missileSpawnTime = NSMapTable<SKNode, NSNumber>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     var wreckOwner = NSMapTable<SKNode, SKShapeNode>(keyOptions: .weakMemory, valueOptions: .weakMemory)
@@ -816,7 +812,7 @@ final class GameScene: SKScene {
     // MARK: - Explosions / Wreckage
 
     private func explodeShip(ship: Ship) {
-        guard !ship.node.isHidden else { return }
+        guard ship.isVisible else { return }
         enableRandomRespawn = true
         let originalVelocity = ship.velocity
 
@@ -836,13 +832,7 @@ final class GameScene: SKScene {
             cameraPanToDartAfter   = now + panDelay
         }
 
-        ship.node.isHidden = true
-        ship.velocity = .zero
-
-        // Dim the needle's head dot the instant it explodes so it doesn't pop
-        if ship === needle {
-            needle.node.childNode(withName: "needleHeadDot")?.alpha = 0
-        }
+        ship.hide()
 
         // In game-over mode each respawn gets a fresh random AI level (0=basic, 1=predictive, 2=expert)
         if gameOver {
@@ -857,23 +847,8 @@ final class GameScene: SKScene {
             }
         }
 
-        guard let path = ship.node.path else { return }
-
-        // Build wreck pieces from the ship's stroke path
-        var pieces = explodePath(path: path, from: ship)
-
-        // PATCH 2 — The needle's head dot (white ball at the tip) flies off as debris
-        if ship === needle {
-            let ang = ship.node.zRotation
-            let offsetY: CGFloat = 21          // matches needleHeadDot y position
-            let ballPiece = SKShapeNode(circleOfRadius: 8)
-            ballPiece.fillColor = .white; ballPiece.strokeColor = .clear
-            ballPiece.position = CGPoint(
-                x: ship.node.position.x - offsetY * sin(ang),
-                y: ship.node.position.y + offsetY * cos(ang))
-            ballPiece.zPosition = ship.node.zPosition
-            pieces.append(ballPiece)
-        }
+        // Build wreck pieces from the ship's structure
+        let pieces = ship.createDebrisPieces()
 
         let lifetime: CGFloat = 2.6
         let ownerNode = ship.node
@@ -891,30 +866,6 @@ final class GameScene: SKScene {
             wreckOwner.setObject(ownerNode, forKey: piece)
             addChild(piece)
         }
-    }
-
-    private func explodePath(path: CGPath, from ship: Ship) -> [SKShapeNode] {
-        var pieces: [SKShapeNode] = []
-        var lastPoint: CGPoint = .zero
-        path.applyWithBlock { elementPtr in
-            let e = elementPtr.pointee
-            switch e.type {
-            case .moveToPoint:
-                lastPoint = e.points[0]
-            case .addLineToPoint:
-                let end = e.points[0]
-                let segPath = CGMutablePath()
-                segPath.move(to: lastPoint); segPath.addLine(to: end)
-                let seg = SKShapeNode(path: segPath)
-                seg.strokeColor = .white; seg.lineWidth = 2
-                seg.position = ship.node.position; seg.zRotation = ship.node.zRotation
-                seg.zPosition = ship.node.zPosition
-                pieces.append(seg)
-                lastPoint = end
-            default: break
-            }
-        }
-        return pieces
     }
 
     // MARK: - Match control
@@ -986,6 +937,29 @@ final class GameScene: SKScene {
         countdownActive = true
         countdownStartTime = CACurrentMediaTime()
         lastDisplayedCountdownNumber = -1
+
+        // Ensure ships are visible and stationary at spawn points during countdown
+        needle.node.isHidden = false
+        needle.node.position = needle.spawnPosition
+        needle.node.zRotation = 0
+        needle.velocity = .zero
+        needle.flame.alpha = 0  // Ensure flame is off
+        // Restore head dot for needle
+        if needle.profile.headDotRadius > 0 {
+            needle.node.childNode(withName: "needleHeadDot")?.alpha = 1
+        }
+        
+        dart.node.isHidden = false
+        dart.node.position = dart.spawnPosition
+        dart.node.zRotation = 0
+        dart.velocity = .zero
+        dart.flame.alpha = 0  // Ensure flame is off
+        
+        // Turn off all thruster states
+        isThrustingNeedle = false
+        isThrustingDart = false
+        aiThrustOn = false
+        wedgeAIThrustOn = false
 
         if countdownContainerNode == nil {
             let container = SKNode()
@@ -1420,7 +1394,7 @@ final class GameScene: SKScene {
         } else if positionPointer(dartDirectionArrow, towardPoint: dart.node.position) {
             dartDirectionArrow?.zRotation = dart.node.zRotation
             dartDirectionArrow?.alpha = 0.85
-            // Distance readout offset from the arrow, stays upright (label is a sibling node)
+            // Show distance readout when dart is off-screen
             if let arrowPos = dartDirectionArrow?.position {
                 let dist = hypot(dart.node.position.x - needle.node.position.x,
                                   dart.node.position.y - needle.node.position.y)
@@ -1429,7 +1403,6 @@ final class GameScene: SKScene {
                 dartDistanceLabel?.alpha = 0.85
             }
         } else {
-            // Dart is on-screen — hide the label
             dartDistanceLabel?.alpha = 0
         }
 
@@ -1509,9 +1482,30 @@ final class GameScene: SKScene {
         if precomputed != .zero { pos = precomputed }
         else if enableRandomRespawn, let p = safeRandomPosition(avoiding: ship) { pos = p }
         else { pos = ship.spawnPosition }
-        ship.node.position = pos; ship.node.zRotation = 0
-        ship.velocity = .zero; ship.node.isHidden = false
-        if ship === needle { needle.node.childNode(withName: "needleHeadDot")?.alpha = 1 }
+        
+        // Final safety check: don't spawn on top of opponent
+        let otherShip: Ship = (ship === needle) ? dart! : needle!
+        if !otherShip.node.isHidden {
+            let dx = pos.x - otherShip.node.position.x
+            let dy = pos.y - otherShip.node.position.y
+            let minSafeDist: CGFloat = 300  // larger than safeRandomPosition check for extra safety
+            if dx*dx + dy*dy < minSafeDist*minSafeDist {
+                // Too close! Delay respawn and try again later
+                if ship === needle {
+                    needleRespawnScheduled = true
+                    needleDestroyTime = CACurrentMediaTime()  // Reset timer to retry soon
+                } else {
+                    dartRespawnScheduled = true
+                    dartDestroyTime = CACurrentMediaTime()
+                }
+                return  // Don't respawn this frame
+            }
+        }
+        
+        ship.node.position = pos
+        ship.node.zRotation = 0
+        ship.velocity = .zero
+        ship.show()
     }
 
     // MARK: - Update loop
@@ -1580,173 +1574,68 @@ final class GameScene: SKScene {
 
         do {
             // Normal play (and game-over exhibition — same AI path, different settings)
-            var needleAimTarget: CGPoint? = nil
-            var dartAimTarget: CGPoint? = nil
-            var needleEvasion = false
-            var wedgeEvasion = false
-            var needleCollisionBrake = false
-            var wedgeCollisionBrake = false
-            let needleHuntingUnarmed = needleAIEnabled && needleAIIntelligence >= 2
-                && !needle.node.isHidden && !dart.node.isHidden
-                && dartBulletsRemaining == 0
-            let wedgeHuntingUnarmed = wedgeAIEnabled && wedgeAIIntelligence >= 2
-                && !dart.node.isHidden && !needle.node.isHidden
-                && needleBulletsRemaining == 0
-
-            // MARK: Needle rotation / AI
+            
+            // MARK: Rotation
             if !needle.node.isHidden {
                 if needleAIEnabled {
-                    if let sun = sunNode {
-                        let dxs = sun.position.x - needle.node.position.x
-                        let dys = sun.position.y - needle.node.position.y
-                        let dist2 = dxs*dxs + dys*dys
-                        let vx = needle.velocity.dx, vy = needle.velocity.dy
-                        let vmag = sqrt(vx*vx + vy*vy)
-
-                        let onCollisionCourse: Bool = {
-                            if vmag > 1 {
-                                let invR = 1.0 / sqrt(dist2)
-                                let dot = (vx * dxs * invR + vy * dys * invR)
-                                let cross = abs(dxs*vy - dys*vx)
-                                let b = cross / vmag
-                                return dot > 0 && b < (sunCollisionRadius + 60)
-                            }
-                            return false
-                        }()
-
-                        let avoidRadius: CGFloat = (needleAIIntelligence >= 2) ? 180 : 140
-                        let tooClose = dist2 < avoidRadius * avoidRadius
-                        let shouldAvoidSun = (needleAIIntelligence >= 1)
-                            ? (shipWillHitSun(needle, in: 3.5) || tooClose)
-                            : (tooClose || onCollisionCourse)
-
-                        if needleAIIntelligence >= 2 && !shouldAvoidSun {
-                            needleCollisionBrake = collisionDecision(ship: needle, opponent: dart,
-                                                                      killTime: dartKillTime, currentTime: currentTime)
-                        }
-
-                        if shouldAvoidSun {
-                            let awayPoint = CGPoint(x: needle.node.position.x - dxs, y: needle.node.position.y - dys)
-                            rotateShip(needle, toward: awayPoint, dt: dt)
-                            needleAimTarget = awayPoint
-                            needleEvasion = true
-                        } else if needleHuntingUnarmed {
-                            let aimPt = huntAimPoint(shooter: needle, target: dart)
-                            rotateShip(needle, toward: aimPt, dt: dt)
-                            needleAimTarget = aimPt
-                        } else if needleCollisionBrake {
-                            let avoidPt = collisionAvoidancePoint(for: needle, opponent: dart)
-                            rotateShip(needle, toward: avoidPt, dt: dt)
-                            needleAimTarget = avoidPt
-                        } else {
-                            if needleAIIntelligence >= 2 {
-                                let aimTarget: CGPoint
-                                if bulletHitUnavoidable(for: needle) {
-                                    aimTarget = level3AimPoint(shooter: needle, target: dart)
-                                } else {
-                                    let (inDanger, awayPoint) = edgeAwareBulletDanger(for: needle, opponent: dart)
-                                    if inDanger { needleEvasion = true }
-                                    aimTarget = inDanger ? awayPoint
-                                                         : strategicPositionTarget(for: needle, opponent: dart, pursueBehind: dartBulletsRemaining > 0)
-                                }
-                                rotateShip(needle, toward: aimTarget, dt: dt)
-                                needleAimTarget = aimTarget
-                            } else {
-                                var nearestMissilePos = CGPoint.zero
-                                var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
-                                enumerateChildNodes(withName: "missile") { node, _ in
-                                    let dxm = node.position.x - self.needle.node.position.x
-                                    let dym = node.position.y - self.needle.node.position.y
-                                    let d2m = dxm*dxm + dym*dym
-                                    if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
-                                }
-                                let avoidBulletR: CGFloat = 120
-                                if nearestMissileD2 < avoidBulletR*avoidBulletR {
-                                    let awayPoint = CGPoint(
-                                        x: needle.node.position.x - (nearestMissilePos.x - needle.node.position.x),
-                                        y: needle.node.position.y - (nearestMissilePos.y - needle.node.position.y))
-                                    rotateShip(needle, toward: awayPoint, dt: dt)
-                                    needleAimTarget = awayPoint
-                                } else if !dart.node.isHidden {
-                                    let dxw = dart.node.position.x - needle.node.position.x
-                                    let dyw = dart.node.position.y - needle.node.position.y
-                                    let d2w = dxw*dxw + dyw*dyw
-                                    if d2w < 90*90 {
-                                        let awayPoint = CGPoint(x: needle.node.position.x - dxw, y: needle.node.position.y - dyw)
-                                        rotateShip(needle, toward: awayPoint, dt: dt)
-                                        needleAimTarget = awayPoint
-                                    } else {
-                                        let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                        rotateShip(needle, toward: t, dt: dt)
-                                        needleAimTarget = t
-                                    }
-                                } else {
-                                    let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                    rotateShip(needle, toward: t, dt: dt)
-                                    needleAimTarget = t
-                                }
-                            }
-                        }
-                    } else {
-                        // No sun — needle
-                        if needleAIIntelligence >= 2 {
-                            needleCollisionBrake = collisionDecision(ship: needle, opponent: dart,
-                                                                      killTime: dartKillTime, currentTime: currentTime)
-                        }
-
-                        if needleHuntingUnarmed {
-                            let aimPt = huntAimPoint(shooter: needle, target: dart)
-                            rotateShip(needle, toward: aimPt, dt: dt)
-                            needleAimTarget = aimPt
-                        } else if needleCollisionBrake {
-                            let avoidPt = collisionAvoidancePoint(for: needle, opponent: dart)
-                            rotateShip(needle, toward: avoidPt, dt: dt)
-                            needleAimTarget = avoidPt
-                        } else if needleAIIntelligence >= 2 {
-                            let aimTarget: CGPoint
-                            if bulletHitUnavoidable(for: needle) {
-                                aimTarget = level3AimPoint(shooter: needle, target: dart)
-                            } else {
-                                let (inDanger, awayPoint) = edgeAwareBulletDanger(for: needle, opponent: dart)
-                                if inDanger { needleEvasion = true }
-                                aimTarget = inDanger ? awayPoint
-                                                     : strategicPositionTarget(for: needle, opponent: dart, pursueBehind: dartBulletsRemaining > 0)
-                            }
-                            rotateShip(needle, toward: aimTarget, dt: dt)
-                            needleAimTarget = aimTarget
-                        } else {
-                            var nearestMissilePos = CGPoint.zero
-                            var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
-                            enumerateChildNodes(withName: "missile") { node, _ in
-                                let dxm = node.position.x - self.needle.node.position.x
-                                let dym = node.position.y - self.needle.node.position.y
-                                let d2m = dxm*dxm + dym*dym
-                                if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
-                            }
-                            let avoidBulletR: CGFloat = 120
-                            if nearestMissileD2 < avoidBulletR*avoidBulletR {
-                                let awayPoint = CGPoint(
-                                    x: needle.node.position.x - (nearestMissilePos.x - needle.node.position.x),
-                                    y: needle.node.position.y - (nearestMissilePos.y - needle.node.position.y))
-                                rotateShip(needle, toward: awayPoint, dt: dt)
-                                needleAimTarget = awayPoint
-                            } else {
-                                let t = predictedAimPoint(shooter: needle, target: dart, intelligence: needleAIIntelligence)
-                                rotateShip(needle, toward: t, dt: dt)
-                                needleAimTarget = t
-                            }
-                        }
+                    let huntingUnarmed = needleAIIntelligence >= 2
+                        && !dart.node.isHidden && dartBulletsRemaining == 0
+                    var isEvading = false
+                    var isBraking = false
+                    
+                    let aimTarget = sunNode != nil
+                        ? computeAimWithSun(ship: needle, opponent: dart,
+                                           intelligence: needleAIIntelligence,
+                                           huntingUnarmed: huntingUnarmed,
+                                           isEvading: &isEvading,
+                                           isBraking: &isBraking,
+                                           currentTime: currentTime,
+                                           lastKillTime: dartKillTime,
+                                           opponentBulletsRemaining: dartBulletsRemaining)
+                        : computeAimWithoutSun(ship: needle, opponent: dart,
+                                              intelligence: needleAIIntelligence,
+                                              huntingUnarmed: huntingUnarmed,
+                                              isEvading: &isEvading,
+                                              isBraking: &isBraking,
+                                              currentTime: currentTime,
+                                              lastKillTime: dartKillTime,
+                                              opponentBulletsRemaining: dartBulletsRemaining)
+                    
+                    rotateShip(needle, toward: aimTarget, dt: dt)
+                    
+                    // Thrust
+                    isThrustingNeedle = computeThrust(ship: needle, opponent: dart,
+                                                      intelligence: needleAIIntelligence,
+                                                      huntingUnarmed: huntingUnarmed,
+                                                      isBraking: isBraking,
+                                                      isEvading: isEvading,
+                                                      thrustState: &aiThrustOn,
+                                                      nextThrustToggle: &aiNextThrustToggle,
+                                                      currentTime: currentTime)
+                    
+                    // Fire
+                    if computeFire(ship: needle, opponent: dart,
+                                  intelligence: needleAIIntelligence,
+                                  isBraking: isBraking,
+                                  isEvading: isEvading,
+                                  opponentBulletsRemaining: dartBulletsRemaining,
+                                  nextFireTime: &aiNextFireTime,
+                                  certainFireCooldown: &aiCertainFireCooldown,
+                                  visibleSince: dartVisibleSince,
+                                  currentTime: currentTime) {
+                        fireMissile(from: needle, muzzleOffset: needle.muzzleOffset())
                     }
+                    
                 } else if let p = aimPoint {
                     rotateShip(needle, toward: p, dt: dt)
-                    needleAimTarget = p
                 }
             }
-
+            
             // MARK: Wedge/Dart rotation / AI
             if !dart.node.isHidden {
                 if wedgeAIEnabled {
                     if wedgeAIIntelligence == 3 {
+                        // Neural AI path (keep existing code)
                         var enemyBullets: [(pos: CGPoint, vel: CGVector)] = []
                         enumerateChildNodes(withName: "missile") { node, _ in
                             guard let owner = self.missileOwner.object(forKey: node),
@@ -1780,156 +1669,64 @@ final class GameScene: SKScene {
                         }
                         isThrustingDart = action.thrust
                         if action.fire && currentTime >= wedgeAINextFireTime {
-                            fireMissile(from: dart, muzzleOffset: muzzleOffset(for: dart))
+                            fireMissile(from: dart, muzzleOffset: dart.muzzleOffset())
                             wedgeAINextFireTime = currentTime + 0.1
                         }
-                    } else if let sun = sunNode {
-                        let dxs = sun.position.x - dart.node.position.x
-                        let dys = sun.position.y - dart.node.position.y
-                        let dist2 = dxs*dxs + dys*dys
-                        let vx = dart.velocity.dx, vy = dart.velocity.dy
-                        let vmag = sqrt(vx*vx + vy*vy)
-
-                        let onCollisionCourse: Bool = {
-                            if vmag > 1 {
-                                let invR = 1.0 / sqrt(dist2)
-                                let dot = (vx * dxs * invR + vy * dys * invR)
-                                let cross = abs(dxs*vy - dys*vx)
-                                let b = cross / vmag
-                                return dot > 0 && b < (sunCollisionRadius + 60)
-                            }
-                            return false
-                        }()
-
-                        let avoidRadius: CGFloat = (wedgeAIIntelligence >= 2) ? 180 : 140
-                        let tooClose = dist2 < avoidRadius * avoidRadius
-                        let shouldAvoidSun = (wedgeAIIntelligence >= 1)
-                            ? (shipWillHitSun(dart, in: 3.5) || tooClose)
-                            : (tooClose || onCollisionCourse)
-
-                        if wedgeAIIntelligence >= 2 && !shouldAvoidSun {
-                            wedgeCollisionBrake = collisionDecision(ship: dart, opponent: needle,
-                                                                     killTime: needleKillTime, currentTime: currentTime)
-                        }
-
-                        if shouldAvoidSun {
-                            let awayPoint = CGPoint(x: dart.node.position.x - dxs, y: dart.node.position.y - dys)
-                            rotateShip(dart, toward: awayPoint, dt: dt)
-                            dartAimTarget = awayPoint
-                            wedgeEvasion = true
-                        } else if wedgeHuntingUnarmed {
-                            let aimPt = huntAimPoint(shooter: dart, target: needle)
-                            rotateShip(dart, toward: aimPt, dt: dt)
-                            dartAimTarget = aimPt
-                        } else if wedgeCollisionBrake {
-                            let avoidPt = collisionAvoidancePoint(for: dart, opponent: needle)
-                            rotateShip(dart, toward: avoidPt, dt: dt)
-                            dartAimTarget = avoidPt
-                        } else {
-                            if wedgeAIIntelligence >= 2 {
-                                let aimTarget: CGPoint
-                                if bulletHitUnavoidable(for: dart) {
-                                    aimTarget = level3AimPoint(shooter: dart, target: needle)
-                                } else {
-                                    let (inDanger, awayPoint) = edgeAwareBulletDanger(for: dart, opponent: needle)
-                                    if inDanger { wedgeEvasion = true }
-                                    aimTarget = inDanger ? awayPoint
-                                                         : strategicPositionTarget(for: dart, opponent: needle, pursueBehind: needleBulletsRemaining > 0)
-                                }
-                                rotateShip(dart, toward: aimTarget, dt: dt)
-                                dartAimTarget = aimTarget
-                            } else {
-                                var nearestMissilePos = CGPoint.zero
-                                var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
-                                enumerateChildNodes(withName: "missile") { node, _ in
-                                    let dxm = node.position.x - self.dart.node.position.x
-                                    let dym = node.position.y - self.dart.node.position.y
-                                    let d2m = dxm*dxm + dym*dym
-                                    if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
-                                }
-                                let avoidBulletR: CGFloat = 120
-                                if nearestMissileD2 < avoidBulletR*avoidBulletR {
-                                    let awayPoint = CGPoint(
-                                        x: dart.node.position.x - (nearestMissilePos.x - dart.node.position.x),
-                                        y: dart.node.position.y - (nearestMissilePos.y - dart.node.position.y))
-                                    rotateShip(dart, toward: awayPoint, dt: dt)
-                                    dartAimTarget = awayPoint
-                                } else if !needle.node.isHidden {
-                                    let dxn = needle.node.position.x - dart.node.position.x
-                                    let dyn = needle.node.position.y - dart.node.position.y
-                                    let d2n = dxn*dxn + dyn*dyn
-                                    if d2n < 90*90 {
-                                        let awayPoint = CGPoint(x: dart.node.position.x - dxn, y: dart.node.position.y - dyn)
-                                        rotateShip(dart, toward: awayPoint, dt: dt)
-                                        dartAimTarget = awayPoint
-                                    } else {
-                                        let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                        rotateShip(dart, toward: t, dt: dt)
-                                        dartAimTarget = t
-                                    }
-                                } else {
-                                    let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                    rotateShip(dart, toward: t, dt: dt)
-                                    dartAimTarget = t
-                                }
-                            }
-                        }
                     } else {
-                        // No sun — wedge
-                        if wedgeAIIntelligence >= 2 {
-                            wedgeCollisionBrake = collisionDecision(ship: dart, opponent: needle,
-                                                                     killTime: needleKillTime, currentTime: currentTime)
-                        }
-
-                        if wedgeHuntingUnarmed {
-                            let aimPt = huntAimPoint(shooter: dart, target: needle)
-                            rotateShip(dart, toward: aimPt, dt: dt)
-                            dartAimTarget = aimPt
-                        } else if wedgeCollisionBrake {
-                            let avoidPt = collisionAvoidancePoint(for: dart, opponent: needle)
-                            rotateShip(dart, toward: avoidPt, dt: dt)
-                            dartAimTarget = avoidPt
-                        } else if wedgeAIIntelligence >= 2 {
-                            let aimTarget: CGPoint
-                            if bulletHitUnavoidable(for: dart) {
-                                aimTarget = level3AimPoint(shooter: dart, target: needle)
-                            } else {
-                                let (inDanger, awayPoint) = edgeAwareBulletDanger(for: dart, opponent: needle)
-                                if inDanger { wedgeEvasion = true }
-                                aimTarget = inDanger ? awayPoint
-                                                     : strategicPositionTarget(for: dart, opponent: needle, pursueBehind: needleBulletsRemaining > 0)
-                            }
-                            rotateShip(dart, toward: aimTarget, dt: dt)
-                            dartAimTarget = aimTarget
-                        } else {
-                            var nearestMissilePos = CGPoint.zero
-                            var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
-                            enumerateChildNodes(withName: "missile") { node, _ in
-                                let dxm = node.position.x - self.dart.node.position.x
-                                let dym = node.position.y - self.dart.node.position.y
-                                let d2m = dxm*dxm + dym*dym
-                                if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
-                            }
-                            let avoidBulletR: CGFloat = 120
-                            if nearestMissileD2 < avoidBulletR*avoidBulletR {
-                                let awayPoint = CGPoint(
-                                    x: dart.node.position.x - (nearestMissilePos.x - dart.node.position.x),
-                                    y: dart.node.position.y - (nearestMissilePos.y - dart.node.position.y))
-                                rotateShip(dart, toward: awayPoint, dt: dt)
-                                dartAimTarget = awayPoint
-                            } else {
-                                let t = predictedAimPoint(shooter: dart, target: needle, intelligence: wedgeAIIntelligence)
-                                rotateShip(dart, toward: t, dt: dt)
-                                dartAimTarget = t
-                            }
+                        // Standard AI (levels 0-2)
+                        let huntingUnarmed = wedgeAIIntelligence >= 2
+                            && !needle.node.isHidden && needleBulletsRemaining == 0
+                        var isEvading = false
+                        var isBraking = false
+                        
+                        let aimTarget = sunNode != nil
+                            ? computeAimWithSun(ship: dart, opponent: needle,
+                                               intelligence: wedgeAIIntelligence,
+                                               huntingUnarmed: huntingUnarmed,
+                                               isEvading: &isEvading,
+                                               isBraking: &isBraking,
+                                               currentTime: currentTime,
+                                               lastKillTime: needleKillTime,
+                                               opponentBulletsRemaining: needleBulletsRemaining)
+                            : computeAimWithoutSun(ship: dart, opponent: needle,
+                                                  intelligence: wedgeAIIntelligence,
+                                                  huntingUnarmed: huntingUnarmed,
+                                                  isEvading: &isEvading,
+                                                  isBraking: &isBraking,
+                                                  currentTime: currentTime,
+                                                  lastKillTime: needleKillTime,
+                                                  opponentBulletsRemaining: needleBulletsRemaining)
+                        
+                        rotateShip(dart, toward: aimTarget, dt: dt)
+                        
+                        // Thrust
+                        isThrustingDart = computeThrust(ship: dart, opponent: needle,
+                                                       intelligence: wedgeAIIntelligence,
+                                                       huntingUnarmed: huntingUnarmed,
+                                                       isBraking: isBraking,
+                                                       isEvading: isEvading,
+                                                       thrustState: &wedgeAIThrustOn,
+                                                       nextThrustToggle: &wedgeAINextThrustToggle,
+                                                       currentTime: currentTime)
+                        
+                        // Fire
+                        if computeFire(ship: dart, opponent: needle,
+                                      intelligence: wedgeAIIntelligence,
+                                      isBraking: isBraking,
+                                      isEvading: isEvading,
+                                      opponentBulletsRemaining: needleBulletsRemaining,
+                                      nextFireTime: &wedgeAINextFireTime,
+                                      certainFireCooldown: &wedgeCertainFireCooldown,
+                                      visibleSince: needleVisibleSince,
+                                      currentTime: currentTime) {
+                            fireMissile(from: dart, muzzleOffset: dart.muzzleOffset())
                         }
                     }
                 } else if let p = aimPoint {
                     rotateShip(dart, toward: p, dt: dt)
-                    dartAimTarget = p
                 }
             }
-
+            
             // Target indicators — commented out; uncomment to re-enable aim visualisation
             // if let t = needleAimTarget {
             //     needleTargetIndicator.position = t; needleTargetIndicator.alpha = 0.7
@@ -1939,226 +1736,6 @@ final class GameScene: SKScene {
             //     dartTargetIndicator.position = t; dartTargetIndicator.alpha = 0.7
             // } else { dartTargetIndicator.alpha = 0 }
 
-            // MARK: Needle AI thrust + fire
-            if needleAIEnabled && !needle.node.isHidden {
-                if needleAIIntelligence >= 2 {
-                    if needleHuntingUnarmed {
-                        isThrustingNeedle = !needleCollisionBrake
-                        aiThrustOn = isThrustingNeedle
-                        aiNextThrustToggle = currentTime + 0.1
-                    } else if needleCollisionBrake {
-                        isThrustingNeedle = true
-                        aiThrustOn = true
-                        aiNextThrustToggle = currentTime + 0.1
-                    } else {
-                        if needleEvasion {
-                            aiThrustOn = true
-                            aiNextThrustToggle = currentTime + Double.random(in: 0.5...1.0)
-                        } else if currentTime >= aiNextThrustToggle {
-                            aiThrustOn.toggle()
-                            let oppDist = hypot(dart.node.position.x - needle.node.position.x,
-                                                dart.node.position.y - needle.node.position.y)
-                            let outOfPosition = abs(oppDist - 260) > 80
-                            aiNextThrustToggle = currentTime + Double.random(
-                                in: aiThrustOn ? (outOfPosition ? 0.6...1.1 : 0.2...0.5)
-                                               : (outOfPosition ? 0.1...0.2 : 0.2...0.5))
-                        }
-                        isThrustingNeedle = aiThrustOn
-                    }
-                } else {
-                    if currentTime >= aiNextThrustToggle {
-                        aiThrustOn.toggle()
-                        aiNextThrustToggle = currentTime + Double.random(in: aiThrustOn ? 0.3...0.8 : 0.4...1.2)
-                    }
-                    isThrustingNeedle = aiThrustOn
-                }
-
-                if needleAIIntelligence >= 2 && !needleCollisionBrake && !needleEvasion
-                    && !dart.node.isHidden && (currentTime - dartVisibleSince) >= 1.0
-                    && currentTime >= aiCertainFireCooldown
-                    && !ownBulletWillHit(shooter: needle, target: dart) {
-                    let aim = level3AimPoint(shooter: needle, target: dart)
-                    let aimAngle = atan2(aim.y - needle.node.position.y,
-                                         aim.x - needle.node.position.x) - .pi/2
-                    if abs(shortestAngleBetween(needle.node.zRotation, aimAngle)) < .pi / 7
-                        && bulletWillHit(shooter: needle, target: dart) {
-                        fireMissile(from: needle, muzzleOffset: muzzleOffset(for: needle))
-                        aiCertainFireCooldown = currentTime + 0.2
-                        aiNextFireTime = currentTime + 0.25
-                    }
-                }
-
-                if currentTime >= aiNextFireTime && !dart.node.isHidden && (currentTime - dartVisibleSince) >= 1.0
-                    && !ownBulletWillHit(shooter: needle, target: dart) {
-                    var shouldFire = true
-                    if needleAIIntelligence < 2 {
-                        let oppDist = hypot(dart.node.position.x - needle.node.position.x,
-                                            dart.node.position.y - needle.node.position.y)
-                        if oppDist > 1000 { shouldFire = false }
-                    }
-                    if shouldFire, needleAIIntelligence >= 1, sunNode != nil {
-                        shouldFire = !simulateBulletHitsSun(from: needle, target: dart)
-                    }
-                    if shouldFire && needleAIIntelligence >= 2 {
-                        if needleCollisionBrake {
-                            shouldFire = false
-                        } else if needleHuntingUnarmed {
-                            let oppPos = (edgeBehavior == .wrap)
-                                ? nearestVirtualPosition(of: dart.node.position, from: needle.node.position)
-                                : dart.node.position
-                            let ddx = oppPos.x - needle.node.position.x
-                            let ddy = oppPos.y - needle.node.position.y
-                            let oppDist = hypot(ddx, ddy)
-                            if oppDist > 600 {
-                                shouldFire = false
-                            } else {
-                                let toOppX = ddx / max(oppDist, 1), toOppY = ddy / max(oppDist, 1)
-                                let netSpeed: CGFloat = 480 + needle.velocity.dx * toOppX + needle.velocity.dy * toOppY
-                                if netSpeed < 80 { shouldFire = false }
-                                else {
-                                    let aimPt = huntAimPoint(shooter: needle, target: dart)
-                                    let aimAngle = atan2(aimPt.y - needle.node.position.y,
-                                                         aimPt.x - needle.node.position.x) - .pi/2
-                                    if abs(shortestAngleBetween(needle.node.zRotation, aimAngle)) > .pi / 9 {
-                                        shouldFire = false
-                                    }
-                                }
-                            }
-                        } else {
-                            let oppDist = hypot(dart.node.position.x - needle.node.position.x,
-                                                dart.node.position.y - needle.node.position.y)
-                            if oppDist > 600 {
-                                shouldFire = false
-                            } else {
-                                let aim = level3AimPoint(shooter: needle, target: dart)
-                                let aimAngle = atan2(aim.y - needle.node.position.y,
-                                                     aim.x - needle.node.position.x) - .pi/2
-                                if abs(shortestAngleBetween(needle.node.zRotation, aimAngle)) > .pi / 12 {
-                                    shouldFire = false
-                                }
-                            }
-                        }
-                    }
-                    if shouldFire {
-                        fireMissile(from: needle, muzzleOffset: muzzleOffset(for: needle))
-                        aiNextFireTime = currentTime + Double.random(in: 0.35...0.7)
-                    } else {
-                        aiNextFireTime = currentTime + 0.1
-                    }
-                }
-            }
-
-            // MARK: Wedge AI thrust + fire
-            if wedgeAIEnabled && !dart.node.isHidden {
-                if wedgeAIIntelligence == 3 {
-                    wedgeAIThrustOn = isThrustingDart
-                    wedgeAINextThrustToggle = currentTime + 0.1
-                } else if wedgeAIIntelligence >= 2 {
-                    if wedgeHuntingUnarmed {
-                        isThrustingDart = !wedgeCollisionBrake
-                        wedgeAIThrustOn = isThrustingDart
-                        wedgeAINextThrustToggle = currentTime + 0.1
-                    } else if wedgeCollisionBrake {
-                        isThrustingDart = true
-                        wedgeAIThrustOn = true
-                        wedgeAINextThrustToggle = currentTime + 0.1
-                    } else {
-                        if wedgeEvasion {
-                            wedgeAIThrustOn = true
-                            wedgeAINextThrustToggle = currentTime + Double.random(in: 0.5...1.0)
-                        } else if currentTime >= wedgeAINextThrustToggle {
-                            wedgeAIThrustOn.toggle()
-                            let oppDist = hypot(needle.node.position.x - dart.node.position.x,
-                                                needle.node.position.y - dart.node.position.y)
-                            let outOfPosition = abs(oppDist - 260) > 80
-                            wedgeAINextThrustToggle = currentTime + Double.random(
-                                in: wedgeAIThrustOn ? (outOfPosition ? 0.6...1.1 : 0.2...0.5)
-                                                    : (outOfPosition ? 0.1...0.2 : 0.2...0.5))
-                        }
-                        isThrustingDart = wedgeAIThrustOn
-                    }
-                } else {
-                    if currentTime >= wedgeAINextThrustToggle {
-                        wedgeAIThrustOn.toggle()
-                        wedgeAINextThrustToggle = currentTime + Double.random(in: wedgeAIThrustOn ? 0.3...0.8 : 0.4...1.2)
-                    }
-                    isThrustingDart = wedgeAIThrustOn
-                }
-
-                if wedgeAIIntelligence >= 2 && wedgeAIIntelligence < 3 && !wedgeCollisionBrake && !wedgeEvasion
-                    && !needle.node.isHidden && (currentTime - needleVisibleSince) >= 1.0
-                    && currentTime >= wedgeCertainFireCooldown
-                    && !ownBulletWillHit(shooter: dart, target: needle) {
-                    let aim = level3AimPoint(shooter: dart, target: needle)
-                    let aimAngle = atan2(aim.y - dart.node.position.y,
-                                         aim.x - dart.node.position.x) - .pi/2
-                    if abs(shortestAngleBetween(dart.node.zRotation, aimAngle)) < .pi / 7
-                        && bulletWillHit(shooter: dart, target: needle) {
-                        fireMissile(from: dart, muzzleOffset: muzzleOffset(for: dart))
-                        wedgeCertainFireCooldown = currentTime + 0.2
-                        wedgeAINextFireTime = currentTime + 0.25
-                    }
-                }
-
-                if wedgeAIIntelligence < 3 && currentTime >= wedgeAINextFireTime && !needle.node.isHidden && (currentTime - needleVisibleSince) >= 1.0
-                    && !ownBulletWillHit(shooter: dart, target: needle) {
-                    var shouldFire = true
-                    if wedgeAIIntelligence < 2 {
-                        let oppDist = hypot(needle.node.position.x - dart.node.position.x,
-                                            needle.node.position.y - dart.node.position.y)
-                        if oppDist > 1000 { shouldFire = false }
-                    }
-                    if shouldFire, wedgeAIIntelligence >= 1, sunNode != nil {
-                        shouldFire = !simulateBulletHitsSun(from: dart, target: needle)
-                    }
-                    if shouldFire && wedgeAIIntelligence >= 2 {
-                        if wedgeCollisionBrake {
-                            shouldFire = false
-                        } else if wedgeHuntingUnarmed {
-                            let oppPos = (edgeBehavior == .wrap)
-                                ? nearestVirtualPosition(of: needle.node.position, from: dart.node.position)
-                                : needle.node.position
-                            let ddx = oppPos.x - dart.node.position.x
-                            let ddy = oppPos.y - dart.node.position.y
-                            let oppDist = hypot(ddx, ddy)
-                            if oppDist > 600 {
-                                shouldFire = false
-                            } else {
-                                let toOppX = ddx / max(oppDist, 1), toOppY = ddy / max(oppDist, 1)
-                                let netSpeed: CGFloat = 480 + dart.velocity.dx * toOppX + dart.velocity.dy * toOppY
-                                if netSpeed < 80 { shouldFire = false }
-                                else {
-                                    let aimPt = huntAimPoint(shooter: dart, target: needle)
-                                    let aimAngle = atan2(aimPt.y - dart.node.position.y,
-                                                         aimPt.x - dart.node.position.x) - .pi/2
-                                    if abs(shortestAngleBetween(dart.node.zRotation, aimAngle)) > .pi / 9 {
-                                        shouldFire = false
-                                    }
-                                }
-                            }
-                        } else {
-                            let oppDist = hypot(needle.node.position.x - dart.node.position.x,
-                                                needle.node.position.y - dart.node.position.y)
-                            if oppDist > 600 {
-                                shouldFire = false
-                            } else {
-                                let aim = level3AimPoint(shooter: dart, target: needle)
-                                let aimAngle = atan2(aim.y - dart.node.position.y,
-                                                     aim.x - dart.node.position.x) - .pi/2
-                                if abs(shortestAngleBetween(dart.node.zRotation, aimAngle)) > .pi / 12 {
-                                    shouldFire = false
-                                }
-                            }
-                        }
-                    }
-                    if shouldFire {
-                        fireMissile(from: dart, muzzleOffset: muzzleOffset(for: dart))
-                        wedgeAINextFireTime = currentTime + Double.random(in: 0.35...0.7)
-                    } else {
-                        wedgeAINextFireTime = currentTime + 0.1
-                    }
-                }
-            }
 
             if isThrustingDart {
                 dart.applyThrust(dt: CGFloat(dt)); dart.flame.alpha = 1
@@ -2403,7 +1980,7 @@ final class GameScene: SKScene {
             }
         }
         
-        // Process all hits using new generalized system
+        // Process all hits using generalized system
         for ship in ships {
             let shipKey = ObjectIdentifier(ship.node)
             if shipsHit.contains(shipKey) {
@@ -2416,14 +1993,6 @@ final class GameScene: SKScene {
                 recordKillTime(for: ship, at: currentTime)
                 explodeShip(ship: ship)
             }
-        }
-        
-        // Keep legacy code path for now (will be redundant but ensures compatibility)
-        if needleHit { if !gameOver { dartScore += 1; updateScoreDisplays() }; dartKillTime = currentTime; explodeShip(ship: needle) }
-        if dartHit   { if !gameOver { needleScore += 1; updateScoreDisplays() }; needleKillTime = currentTime; explodeShip(ship: dart) }
-        if !needle.node.isHidden && !dart.node.isHidden && needle.node.frame.intersects(dart.node.frame) {
-            if !gameOver { needleScore += 1; dartScore += 1; updateScoreDisplays() }
-            explodeShip(ship: needle); explodeShip(ship: dart)
         }
 
         lastUpdateTime = currentTime
@@ -2722,7 +2291,7 @@ override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
                     let duration = CACurrentMediaTime() - info.startTime
                 let location = touch.location(in: self)
                 if duration < 0.25, let button = info.buttonNode, button.contains(location) {
-                    fireMissile(from: info.ship, muzzleOffset: muzzleOffset(for: info.ship))
+                    fireMissile(from: info.ship, muzzleOffset: info.ship.muzzleOffset())
                 }
                 continue
             }

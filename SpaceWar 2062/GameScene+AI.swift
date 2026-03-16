@@ -458,4 +458,267 @@ extension GameScene {
             shipNode.zRotation += (angleDiff > 0 ? step : -step)
         }
     }
+    
+    // MARK: - High-Level AI Execution
+    
+    /// Complete AI decision for one frame
+    struct AIDecision {
+        var aimTarget: CGPoint?
+        var shouldThrust: Bool
+        var shouldFire: Bool
+        var isEvading: Bool
+        var isBraking: Bool
+    }
+    
+    /// Compute rotation target for a ship with sun avoidance
+    func computeAimWithSun(ship: Ship, opponent: Ship, intelligence: Int,
+                          huntingUnarmed: Bool, isEvading: inout Bool,
+                          isBraking: inout Bool, currentTime: TimeInterval,
+                          lastKillTime: TimeInterval, opponentBulletsRemaining: Int) -> CGPoint {
+        
+        guard let sun = sunNode else {
+            return computeAimWithoutSun(ship: ship, opponent: opponent, intelligence: intelligence,
+                                       huntingUnarmed: huntingUnarmed, isEvading: &isEvading,
+                                       isBraking: &isBraking, currentTime: currentTime,
+                                       lastKillTime: lastKillTime, opponentBulletsRemaining: opponentBulletsRemaining)
+        }
+        
+        let dxs = sun.position.x - ship.node.position.x
+        let dys = sun.position.y - ship.node.position.y
+        let dist2 = dxs*dxs + dys*dys
+        let vx = ship.velocity.dx, vy = ship.velocity.dy
+        let vmag = sqrt(vx*vx + vy*vy)
+        
+        let onCollisionCourse: Bool = {
+            if vmag > 1 {
+                let invR = 1.0 / sqrt(dist2)
+                let dot = (vx * dxs * invR + vy * dys * invR)
+                let cross = abs(dxs*vy - dys*vx)
+                let b = cross / vmag
+                return dot > 0 && b < (sunCollisionRadius + 60)
+            }
+            return false
+        }()
+        
+        let avoidRadius: CGFloat = (intelligence >= 2) ? 180 : 140
+        let tooClose = dist2 < avoidRadius * avoidRadius
+        let shouldAvoidSun = (intelligence >= 1)
+            ? (shipWillHitSun(ship, in: 3.5) || tooClose)
+            : (tooClose || onCollisionCourse)
+        
+        if intelligence >= 2 && !shouldAvoidSun {
+            isBraking = collisionDecision(ship: ship, opponent: opponent,
+                                         killTime: lastKillTime, currentTime: currentTime)
+        }
+        
+        if shouldAvoidSun {
+            isEvading = true
+            return CGPoint(x: ship.node.position.x - dxs, y: ship.node.position.y - dys)
+        } else if huntingUnarmed {
+            return huntAimPoint(shooter: ship, target: opponent)
+        } else if isBraking {
+            return collisionAvoidancePoint(for: ship, opponent: opponent)
+        } else if intelligence >= 2 {
+            if bulletHitUnavoidable(for: ship) {
+                return level3AimPoint(shooter: ship, target: opponent)
+            } else {
+                let (inDanger, awayPoint) = edgeAwareBulletDanger(for: ship, opponent: opponent)
+                if inDanger { isEvading = true }
+                return inDanger ? awayPoint
+                    : strategicPositionTarget(for: ship, opponent: opponent, pursueBehind: opponentBulletsRemaining > 0)
+            }
+        } else {
+            // Level 0/1: simple bullet avoidance + basic targeting
+            var nearestMissilePos = CGPoint.zero
+            var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
+            enumerateChildNodes(withName: "missile") { node, _ in
+                let dxm = node.position.x - ship.node.position.x
+                let dym = node.position.y - ship.node.position.y
+                let d2m = dxm*dxm + dym*dym
+                if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
+            }
+            let avoidBulletR: CGFloat = 120
+            if nearestMissileD2 < avoidBulletR*avoidBulletR {
+                return CGPoint(x: ship.node.position.x - (nearestMissilePos.x - ship.node.position.x),
+                              y: ship.node.position.y - (nearestMissilePos.y - ship.node.position.y))
+            } else if !opponent.node.isHidden {
+                let dxw = opponent.node.position.x - ship.node.position.x
+                let dyw = opponent.node.position.y - ship.node.position.y
+                let d2w = dxw*dxw + dyw*dyw
+                if d2w < 90*90 {
+                    return CGPoint(x: ship.node.position.x - dxw, y: ship.node.position.y - dyw)
+                }
+            }
+            return predictedAimPoint(shooter: ship, target: opponent, intelligence: intelligence)
+        }
+    }
+    
+    /// Compute rotation target without sun
+    func computeAimWithoutSun(ship: Ship, opponent: Ship, intelligence: Int,
+                             huntingUnarmed: Bool, isEvading: inout Bool,
+                             isBraking: inout Bool, currentTime: TimeInterval,
+                             lastKillTime: TimeInterval, opponentBulletsRemaining: Int) -> CGPoint {
+        
+        if intelligence >= 2 {
+            isBraking = collisionDecision(ship: ship, opponent: opponent,
+                                         killTime: lastKillTime, currentTime: currentTime)
+        }
+        
+        if huntingUnarmed {
+            return huntAimPoint(shooter: ship, target: opponent)
+        } else if isBraking {
+            return collisionAvoidancePoint(for: ship, opponent: opponent)
+        } else if intelligence >= 2 {
+            if bulletHitUnavoidable(for: ship) {
+                return level3AimPoint(shooter: ship, target: opponent)
+            } else {
+                let (inDanger, awayPoint) = edgeAwareBulletDanger(for: ship, opponent: opponent)
+                if inDanger { isEvading = true }
+                return inDanger ? awayPoint
+                    : strategicPositionTarget(for: ship, opponent: opponent, pursueBehind: opponentBulletsRemaining > 0)
+            }
+        } else {
+            var nearestMissilePos = CGPoint.zero
+            var nearestMissileD2 = CGFloat.greatestFiniteMagnitude
+            enumerateChildNodes(withName: "missile") { node, _ in
+                let dxm = node.position.x - ship.node.position.x
+                let dym = node.position.y - ship.node.position.y
+                let d2m = dxm*dxm + dym*dym
+                if d2m < nearestMissileD2 { nearestMissileD2 = d2m; nearestMissilePos = node.position }
+            }
+            let avoidBulletR: CGFloat = 120
+            if nearestMissileD2 < avoidBulletR*avoidBulletR {
+                return CGPoint(x: ship.node.position.x - (nearestMissilePos.x - ship.node.position.x),
+                              y: ship.node.position.y - (nearestMissilePos.y - ship.node.position.y))
+            }
+            return predictedAimPoint(shooter: ship, target: opponent, intelligence: intelligence)
+        }
+    }
+    
+    /// Compute thrust decision
+    func computeThrust(ship: Ship, opponent: Ship, intelligence: Int,
+                      huntingUnarmed: Bool, isBraking: Bool, isEvading: Bool,
+                      thrustState: inout Bool, nextThrustToggle: inout TimeInterval,
+                      currentTime: TimeInterval) -> Bool {
+        
+        if intelligence >= 2 {
+            if huntingUnarmed {
+                return !isBraking
+            } else if isBraking {
+                return true
+            } else {
+                if isEvading {
+                    thrustState = true
+                    nextThrustToggle = currentTime + Double.random(in: 0.5...1.0)
+                } else if currentTime >= nextThrustToggle {
+                    thrustState.toggle()
+                    let oppDist = hypot(opponent.node.position.x - ship.node.position.x,
+                                       opponent.node.position.y - ship.node.position.y)
+                    let outOfPosition = abs(oppDist - 260) > 80
+                    nextThrustToggle = currentTime + Double.random(
+                        in: thrustState ? (outOfPosition ? 0.6...1.1 : 0.2...0.5)
+                                        : (outOfPosition ? 0.1...0.2 : 0.2...0.5))
+                }
+                return thrustState
+            }
+        } else {
+            if currentTime >= nextThrustToggle {
+                thrustState.toggle()
+                nextThrustToggle = currentTime + Double.random(in: thrustState ? 0.3...0.8 : 0.4...1.2)
+            }
+            return thrustState
+        }
+    }
+    
+    /// Compute fire decision
+    func computeFire(ship: Ship, opponent: Ship, intelligence: Int,
+                    isBraking: Bool, isEvading: Bool, opponentBulletsRemaining: Int,
+                    nextFireTime: inout TimeInterval, certainFireCooldown: inout TimeInterval,
+                    visibleSince: TimeInterval, currentTime: TimeInterval) -> Bool {
+        
+        guard !opponent.node.isHidden else { return false }
+        guard (currentTime - visibleSince) >= 1.0 else { return false }
+        guard !ownBulletWillHit(shooter: ship, target: opponent) else { return false }
+        
+        let huntingUnarmed = intelligence >= 2 && opponentBulletsRemaining == 0
+        
+        // Certain-fire check for level 2+
+        if intelligence >= 2 && !isBraking && !isEvading
+            && currentTime >= certainFireCooldown {
+            let aim = level3AimPoint(shooter: ship, target: opponent)
+            let aimAngle = atan2(aim.y - ship.node.position.y,
+                                aim.x - ship.node.position.x) - .pi/2
+            if abs(shortestAngleBetween(ship.node.zRotation, aimAngle)) < .pi / 7
+                && bulletWillHit(shooter: ship, target: opponent) {
+                certainFireCooldown = currentTime + 0.2
+                nextFireTime = currentTime + 0.25
+                return true
+            }
+        }
+        
+        // Regular firing
+        guard currentTime >= nextFireTime else { return false }
+        
+        var shouldFire = true
+        
+        if intelligence < 2 {
+            let oppDist = hypot(opponent.node.position.x - ship.node.position.x,
+                               opponent.node.position.y - ship.node.position.y)
+            if oppDist > 1000 { shouldFire = false }
+        }
+        
+        if shouldFire && intelligence >= 1 && sunNode != nil {
+            shouldFire = !simulateBulletHitsSun(from: ship, target: opponent)
+        }
+        
+        if shouldFire && intelligence >= 2 {
+            if isBraking {
+                shouldFire = false
+            } else if huntingUnarmed {
+                let oppPos = (edgeBehavior == .wrap)
+                    ? nearestVirtualPosition(of: opponent.node.position, from: ship.node.position)
+                    : opponent.node.position
+                let ddx = oppPos.x - ship.node.position.x
+                let ddy = oppPos.y - ship.node.position.y
+                let oppDist = hypot(ddx, ddy)
+                if oppDist > 600 {
+                    shouldFire = false
+                } else {
+                    let toOppX = ddx / max(oppDist, 1), toOppY = ddy / max(oppDist, 1)
+                    let netSpeed: CGFloat = 480 + ship.velocity.dx * toOppX + ship.velocity.dy * toOppY
+                    if netSpeed < 80 {
+                        shouldFire = false
+                    } else {
+                        let aimPt = huntAimPoint(shooter: ship, target: opponent)
+                        let aimAngle = atan2(aimPt.y - ship.node.position.y,
+                                            aimPt.x - ship.node.position.x) - .pi/2
+                        if abs(shortestAngleBetween(ship.node.zRotation, aimAngle)) > .pi / 9 {
+                            shouldFire = false
+                        }
+                    }
+                }
+            } else {
+                let oppDist = hypot(opponent.node.position.x - ship.node.position.x,
+                                   opponent.node.position.y - ship.node.position.y)
+                if oppDist > 600 {
+                    shouldFire = false
+                } else {
+                    let aim = level3AimPoint(shooter: ship, target: opponent)
+                    let aimAngle = atan2(aim.y - ship.node.position.y,
+                                        aim.x - ship.node.position.x) - .pi/2
+                    if abs(shortestAngleBetween(ship.node.zRotation, aimAngle)) > .pi / 12 {
+                        shouldFire = false
+                    }
+                }
+            }
+        }
+        
+        if shouldFire {
+            nextFireTime = currentTime + Double.random(in: 0.35...0.7)
+        } else {
+            nextFireTime = currentTime + 0.1
+        }
+        
+        return shouldFire
+    }
 }

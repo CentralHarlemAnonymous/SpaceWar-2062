@@ -162,7 +162,7 @@ final class Ship {
             dot.strokeColor = .clear
             dot.position = CGPoint(x: 0, y: profile.headDotY)
             dot.zPosition = 3
-            dot.name = "needleHeadDot"
+            dot.name = "headDot"
             self.node.addChild(dot)
         }
     }
@@ -198,5 +198,81 @@ final class Ship {
         node.zRotation = 0
         velocity = .zero
         node.isHidden = false
+        // Restore head dot if present (important when resetting after game over)
+        if profile.headDotRadius > 0 {
+            node.childNode(withName: "needleHeadDot")?.alpha = 1
+        }
+    }
+    
+    // MARK: - Visibility
+    
+    var isVisible: Bool {
+        return !node.isHidden
+    }
+    
+    func hide() {
+        node.isHidden = true
+        velocity = .zero
+        // Dim head dot if present
+        if profile.headDotRadius > 0 {
+            node.childNode(withName: "needleHeadDot")?.alpha = 0
+        }
+    }
+    
+    func show() {
+        node.isHidden = false
+        // Restore head dot if present
+        if profile.headDotRadius > 0 {
+            node.childNode(withName: "needleHeadDot")?.alpha = 1
+        }
+    }
+    
+    // MARK: - Combat
+    
+    func muzzleOffset() -> CGPoint {
+        return CGPoint(x: 0, y: profile.muzzleY)
+    }
+    
+    func createDebrisPieces() -> [SKShapeNode] {
+        guard let path = node.path else { return [] }
+        var pieces: [SKShapeNode] = []
+        var lastPoint: CGPoint = .zero
+        path.applyWithBlock { elementPtr in
+            let e = elementPtr.pointee
+            switch e.type {
+            case .moveToPoint:
+                lastPoint = e.points[0]
+            case .addLineToPoint:
+                let end = e.points[0]
+                let segPath = CGMutablePath()
+                segPath.move(to: lastPoint)
+                segPath.addLine(to: end)
+                let seg = SKShapeNode(path: segPath)
+                seg.strokeColor = .white
+                seg.lineWidth = 2
+                seg.position = node.position
+                seg.zRotation = node.zRotation
+                seg.zPosition = node.zPosition
+                pieces.append(seg)
+                lastPoint = end
+            default: break
+            }
+        }
+        
+        // Add head dot debris for ships that have one (e.g., needle)
+        if profile.headDotRadius > 0 {
+            let offsetY = profile.headDotY
+            let ang = node.zRotation
+            let ballPiece = SKShapeNode(circleOfRadius: profile.headDotRadius)
+            ballPiece.fillColor = .white
+            ballPiece.strokeColor = .clear
+            ballPiece.position = CGPoint(
+                x: node.position.x - offsetY * sin(ang),
+                y: node.position.y + offsetY * cos(ang))
+            ballPiece.zPosition = node.zPosition
+            pieces.append(ballPiece)
+        }
+        
+        return pieces
     }
 }
