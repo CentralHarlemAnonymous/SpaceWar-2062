@@ -9,197 +9,51 @@
 import SpriteKit
 import GameplayKit
 
-// MARK: - ShipProfile
+// MARK: - ShipState
 
-/// Static description of a ship type. All per-type constants live here;
-/// runtime state (position, velocity, …) stays on Ship.
-struct ShipProfile {
-    // Identity
-    let typeName:           String
-
-    // Appearance
-    let indicatorColor:     SKColor     // border arrow, distance labels, buttons
-    let shipColor:          SKColor     // stroke color of the live ship node
-    let shipPath:           CGPath      // canonical, unscaled path used to draw the ship
-    let muzzleY:            CGFloat     // y of the firing tip in ship-local coordinates
-    let headDotRadius:      CGFloat     // radius of the nose dot; 0 = no dot
-    let headDotY:           CGFloat     // y of the nose dot in ship-local coordinates
-
-    // Border direction indicator
-    let indicatorPath:      CGPath      // pre-scaled silhouette for the edge arrow
-    let indicatorLineWidth: CGFloat
-    let indicatorGlowWidth: CGFloat
-    let indicatorHasHeadDot: Bool       // whether the edge arrow shows a nose dot
-
-    // Physics
-    let maxSpeed:           CGFloat     // points/sec
-    let acceleration:       CGFloat     // points/sec²
-    let turnSpeed:          CGFloat     // radians/sec
-    let bulletSpeed:        CGFloat     // points/sec (must exceed maxSpeed)
-
-    // Gameplay
-    let minFireInterval:    TimeInterval // minimum seconds between shots
-    let startingBullets:    Int          // default bullet inventory (overridden by UI slider)
-    let armorFront:         Int          // hits to kill when struck from front (≥1)
-    let armorRear:          Int          // hits to kill when struck from rear  (≥1)
-
-    // MARK: Built-in profiles
-
-    static let needle: ShipProfile = {
-        // Ship body
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: -24))
-        path.addLine(to: CGPoint(x: 0, y: 18))
-        path.move(to: CGPoint(x: -3, y: -16)); path.addLine(to: CGPoint(x:  3, y: -16))
-        path.move(to: CGPoint(x: -3, y:  -8)); path.addLine(to: CGPoint(x:  3, y:  -8))
-        path.move(to: CGPoint(x: -4, y:   0)); path.addLine(to: CGPoint(x:  4, y:   0))
-        path.move(to: CGPoint(x: -3, y:   8)); path.addLine(to: CGPoint(x:  3, y:   8))
-
-        // Indicator silhouette at 50 % scale
-        let s: CGFloat = 0.50
-        let ip = CGMutablePath()
-        ip.move(to: CGPoint(x: 0,     y: -24*s)); ip.addLine(to: CGPoint(x:    0, y: 18*s))
-        ip.move(to: CGPoint(x: -3*s,  y: -16*s)); ip.addLine(to: CGPoint(x:  3*s, y: -16*s))
-        ip.move(to: CGPoint(x: -3*s,  y:  -8*s)); ip.addLine(to: CGPoint(x:  3*s, y:  -8*s))
-        ip.move(to: CGPoint(x: -4*s,  y:   0   )); ip.addLine(to: CGPoint(x:  4*s, y:   0))
-        ip.move(to: CGPoint(x: -3*s,  y:   8*s)); ip.addLine(to: CGPoint(x:  3*s, y:   8*s))
-
-        return ShipProfile(
-            typeName:            "needle",
-            indicatorColor:      SKColor(red: 0.9, green: 0.45, blue: 0.15, alpha: 1),
-            shipColor:           .white,
-            shipPath:            path,
-            muzzleY:             21,
-            headDotRadius:       8,
-            headDotY:            21,
-            indicatorPath:       ip,
-            indicatorLineWidth:  1.2,
-            indicatorGlowWidth:  1,
-            indicatorHasHeadDot: true,
-            maxSpeed:            400,
-            acceleration:        250,
-            turnSpeed:           .pi * 2,
-            bulletSpeed:         480,
-            minFireInterval:     0.15,
-            startingBullets:     40,
-            armorFront:          1,
-            armorRear:           1
-        )
-    }()
-
-    static let dart: ShipProfile = {
-        // Ship body
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: 16))
-        path.addLine(to: CGPoint(x:  14, y: -14))
-        path.addLine(to: CGPoint(x: 0,   y:  -6))
-        path.addLine(to: CGPoint(x: -14, y: -14))
-        path.addLine(to: CGPoint(x: 0,   y:  16))
-
-        // Indicator silhouette at 85 % scale
-        let s: CGFloat = 0.85
-        let ip = CGMutablePath()
-        ip.move(to: CGPoint(x: 0,      y:  16*s))
-        ip.addLine(to: CGPoint(x:  14*s, y: -14*s))
-        ip.addLine(to: CGPoint(x: 0,     y:  -6*s))
-        ip.addLine(to: CGPoint(x: -14*s, y: -14*s))
-        ip.addLine(to: CGPoint(x: 0,     y:  16*s))
-
-        return ShipProfile(
-            typeName:            "dart",
-            indicatorColor:      SKColor(red: 0.25, green: 0.6, blue: 1.0, alpha: 1),
-            shipColor:           .white,
-            shipPath:            path,
-            muzzleY:             16,
-            headDotRadius:       0,
-            headDotY:            0,
-            indicatorPath:       ip,
-            indicatorLineWidth:  1.8,
-            indicatorGlowWidth:  3,
-            indicatorHasHeadDot: false,
-            maxSpeed:            400,
-            acceleration:        250,
-            turnSpeed:           .pi * 2,
-            bulletSpeed:         480,
-            minFireInterval:     0.15,
-            startingBullets:     40,
-            armorFront:          1,
-            armorRear:           1
-        )
-    }()
-}
-
-// MARK: - Ship
-
-final class Ship {
-    let node: SKShapeNode
-    let flame: SKShapeNode
-    var velocity: CGVector = .zero
-    var spawnPosition: CGPoint
-    let name: String
-    let profile: ShipProfile
-
-    init(profile: ShipProfile, flame: SKShapeNode, spawn: CGPoint) {
-        self.profile = profile
-        self.node = SKShapeNode(path: profile.shipPath)
-        self.node.strokeColor = profile.shipColor
-        self.node.lineWidth = 2
-        self.node.glowWidth = 4
-        self.node.zPosition = 1
-
-        self.flame = flame
-        self.flame.alpha = 0
-        self.node.addChild(flame)
-
-        self.spawnPosition = spawn
-        self.name = profile.typeName
-        self.node.name = profile.typeName
-        self.node.position = spawn
-
-        // Head dot (nose marker) — only for ships that have one
-        if profile.headDotRadius > 0 {
-            let dot = SKShapeNode(circleOfRadius: profile.headDotRadius)
-            dot.fillColor = .white
-            dot.strokeColor = .clear
-            dot.position = CGPoint(x: 0, y: profile.headDotY)
-            dot.zPosition = 3
-            dot.name = "needleHeadDot"
-            self.node.addChild(dot)
-        }
-    }
-
-    func clampSpeed() {
-        let spd = sqrt(velocity.dx * velocity.dx + velocity.dy * velocity.dy)
-        if spd > profile.maxSpeed && spd > 0 {
-            let k = profile.maxSpeed / spd
-            velocity.dx *= k
-            velocity.dy *= k
-        }
-    }
-
-    func applyThrust(dt: CGFloat) {
-        let ang = node.zRotation
-        velocity.dx += -profile.acceleration * sin(ang) * dt
-        velocity.dy +=  profile.acceleration * cos(ang) * dt
-    }
-
-    func integrate(dt: CGFloat) {
-        node.position.x += velocity.dx * dt
-        node.position.y += velocity.dy * dt
-    }
-
-    func alignRotationToVelocityIfMoving() {
-        if abs(velocity.dx) + abs(velocity.dy) > 0.001 {
-            node.zRotation = atan2(velocity.dy, velocity.dx) - .pi/2
-        }
-    }
-
-    func reset() {
-        node.position = spawnPosition
-        node.zRotation = 0
-        velocity = .zero
-        node.isHidden = false
-    }
+/// Runtime state for each ship (AI, controls, tracking)
+final class ShipState {
+    // AI
+    var aiEnabled: Bool = false
+    var aiIntelligence: Int = 0
+    var aiNextThrustToggle: TimeInterval = 0
+    var aiThrustOn: Bool = false
+    var aiNextFireTime: TimeInterval = 0
+    var aiCertainFireCooldown: TimeInterval = 0
+    
+    // Tracking
+    var visibleSince: TimeInterval = 0
+    var destroyTime: TimeInterval = 0
+    var respawnScheduled: Bool = false
+    var respawnTarget: CGPoint = .zero
+    var cameraPanAfter: TimeInterval = 0
+    
+    // Velocity tracking for prediction
+    var previousVelocity: CGVector = .zero
+    var observedAcceleration: CGVector = .zero
+    var smoothedAcceleration: CGVector = .zero
+    
+    // Bullets
+    var bulletLimitSelection: Int = 1
+    var bulletsRemaining: Int = 0
+    var bulletCounterNode: SKNode?
+    
+    // Controls (if player-controlled)
+    var fireButton: SKShapeNode?
+    var thrustButton: SKShapeNode?
+    var clusterTitleLabel: SKLabelNode?
+    var isThrustingByPlayer: Bool = false
+    var activeThrustTouches = Set<UITouch>()
+    
+    // UI
+    var scoreNode: SKNode?
+    var directionArrow: SKShapeNode?
+    var distanceLabel: SKLabelNode?
+    var targetIndicator: SKShapeNode?
+    var bulletSliderTrack: SKShapeNode?
+    var bulletSliderKnob: SKShapeNode?
+    var aiSliderTrack: SKShapeNode?
+    var aiSliderKnob: SKShapeNode?
 }
 
 // MARK: - GameScene
@@ -219,6 +73,10 @@ final class GameScene: SKScene {
     private var dartScore: Int = 0
     private var needleScoreNode: SKNode!
     private var dartScoreNode: SKNode!
+    
+    // Generalized score tracking for multi-ship support
+    private var shipScores: [ObjectIdentifier: Int] = [:]  // Uses ship.node as key
+    private var shipKillTimes: [ObjectIdentifier: TimeInterval] = [:]  // Replaces needleKillTime/dartKillTime
 
     private var optionsButton: SKShapeNode!
     private var optionsOverlay: SKNode?
@@ -313,10 +171,7 @@ final class GameScene: SKScene {
     private var needleBulletCounterNode: SKNode?
     private var dartBulletCounterNode: SKNode?
 
-    private var bulletGravLabel: SKLabelNode?
-
     private var sunEnabled: Bool = true
-    private var sunAffectsBullets: Bool = true
     private var sunNode: SKShapeNode?
     private let sunCollisionRadius: CGFloat = 28
 
@@ -325,12 +180,10 @@ final class GameScene: SKScene {
     private var edgeWrapButton: SKShapeNode?
     private var aiToggleButton: SKShapeNode?
     private var wedgeAIToggleButton: SKShapeNode?
-    private var sunToggleButton: SKShapeNode?
-    private var bulletGravToggleButton: SKShapeNode?
 
     // Gravity slider: 10 steps, value = step × 4.0  →  0, 4, 8 … 40
-    // Step 2 = 8.0 (original "strong" default)
-    private var gravitySliderSelection: Int = 2
+    // Step 5 = 20.0 (2.5x the original default)
+    private var gravitySliderSelection: Int = 5
     private let gravitySliderSteps:     Int = 10
     private var gravitySliderTrack: SKShapeNode?
     private var gravitySliderKnob:  SKShapeNode?
@@ -438,10 +291,19 @@ final class GameScene: SKScene {
     private var gameOver: Bool = false
     private var victorLabelNode: SKNode?
     private var enableRandomRespawn: Bool = false
-
+    
+    // Countdown timer
+    private var countdownActive: Bool = false
+    private var countdownStartTime: TimeInterval = 0
+    private var countdownContainerNode: SKNode?
+    private var lastDisplayedCountdownNumber: Int = -1
+    
     // Ships
     private var needle: Ship!
     private var dart: Ship!
+    
+    // Generalized ship array for multi-ship support
+    private var ships: [Ship] = []
 
     // Fire buttons
     private var fireThrustButton: SKShapeNode!
@@ -572,6 +434,9 @@ final class GameScene: SKScene {
 
         needle = Ship(profile: .needle, flame: createFlameNode(), spawn: needleSpawn)
         dart   = Ship(profile: .dart,   flame: createFlameNode(), spawn: dartSpawn)
+        
+        // Populate ships array for generalized collision detection
+        ships = [needle, dart]
 
         addChild(needle.node)
         addChild(dart.node)
@@ -794,6 +659,9 @@ final class GameScene: SKScene {
         setupStars()
         setupVirtualBoundary()
         setupDirectionArrows()
+        
+        // Start countdown timer when game first loads
+        startCountdown()
     }
 
     override func didMove(to view: SKView) {
@@ -962,16 +830,14 @@ final class GameScene: SKScene {
         let simSteps = Int(simLife / simStep)
         let sx = sun.position.x, sy = sun.position.y
         let sunR = sunCollisionRadius
-        let baseG: CGFloat = 18000 * gravityMultiplier * (5.0 / 8.0)
+        let baseG: CGFloat = 18000 * gravityMultiplier * (7.0 / 8.0)
         for _ in 0..<simSteps {
-            if sunAffectsBullets {
-                let dx = sx - bx, dy = sy - by
-                let r2 = dx*dx + dy*dy + 100
-                let invR = 1.0 / sqrt(r2)
-                let a = baseG / r2
-                bvx += dx * invR * a * simStep
-                bvy += dy * invR * a * simStep
-            }
+            let dx = sx - bx, dy = sy - by
+            let r2 = dx*dx + dy*dy + 100
+            let invR = 1.0 / sqrt(r2)
+            let a = baseG / r2
+            bvx += dx * invR * a * simStep
+            bvy += dy * invR * a * simStep
             bx += bvx * simStep
             by += bvy * simStep
             if (bx-sx)*(bx-sx) + (by-sy)*(by-sy) <= sunR*sunR { return true }
@@ -1107,18 +973,15 @@ final class GameScene: SKScene {
             let simStep: CGFloat = 0.05
             let simLife: CGFloat = self.bulletLifeSeconds
             let simSteps = Int(simLife / simStep)
-            let baseG: CGFloat = 18000 * self.gravityMultiplier * (5.0 / 8.0)
+            let baseG: CGFloat = 18000 * self.gravityMultiplier * (7.0 / 8.0)
             for _ in 0..<simSteps {
                 if let sun = self.sunNode {
-                    if self.sunAffectsBullets {
-                        let sdx = sun.position.x - bx, sdy = sun.position.y - by
-                        let r2 = sdx*sdx + sdy*sdy + 100
-                        let a  = baseG / r2
-                        let invR = 1.0 / sqrt(r2)
-                        bvx += sdx * invR * a * simStep
-                        bvy += sdy * invR * a * simStep
-                    }
                     let sdx = sun.position.x - bx, sdy = sun.position.y - by
+                    let r2 = sdx*sdx + sdy*sdy + 100
+                    let a  = baseG / r2
+                    let invR = 1.0 / sqrt(r2)
+                    bvx += sdx * invR * a * simStep
+                    bvy += sdy * invR * a * simStep
                     if sdx*sdx + sdy*sdy <= self.sunCollisionRadius * self.sunCollisionRadius { return }
                 }
                 bx += bvx * simStep; by += bvy * simStep
@@ -1140,19 +1003,16 @@ final class GameScene: SKScene {
         let simSteps = Int(simLife / simStep)
         var tx = target.node.position.x, ty = target.node.position.y
         let tvx = target.velocity.dx,    tvy = target.velocity.dy
-        let baseG: CGFloat = 18000 * gravityMultiplier * (5.0 / 8.0)
+        let baseG: CGFloat = 18000 * gravityMultiplier * (7.0 / 8.0)
 
         for _ in 0..<simSteps {
             if let sun = sunNode {
-                if sunAffectsBullets {
-                    let sdx = sun.position.x - bx, sdy = sun.position.y - by
-                    let r2  = sdx*sdx + sdy*sdy + 100
-                    let a   = baseG / r2
-                    let invR = 1.0 / sqrt(r2)
-                    bvx += sdx * invR * a * simStep
-                    bvy += sdy * invR * a * simStep
-                }
                 let sdx = sun.position.x - bx, sdy = sun.position.y - by
+                let r2  = sdx*sdx + sdy*sdy + 100
+                let a   = baseG / r2
+                let invR = 1.0 / sqrt(r2)
+                bvx += sdx * invR * a * simStep
+                bvy += sdy * invR * a * simStep
                 if sdx*sdx + sdy*sdy <= sunCollisionRadius * sunCollisionRadius { return false }
             }
             bx += bvx * simStep; by += bvy * simStep
@@ -1305,6 +1165,38 @@ final class GameScene: SKScene {
         }
 
         return score(c1) <= score(c2) ? clamp(c1) : clamp(c2)
+    }
+
+    // MARK: - Generalized Ship Management
+    
+    private func incrementScore(for ship: Ship) {
+        let key = ObjectIdentifier(ship.node)
+        shipScores[key, default: 0] += 1
+        
+        // Also update legacy score variables for backward compatibility
+        if ship === needle {
+            needleScore = shipScores[key]!
+        } else if ship === dart {
+            dartScore = shipScores[key]!
+        }
+        updateScoreDisplays()
+    }
+    
+    private func recordKillTime(for ship: Ship, at time: TimeInterval) {
+        let key = ObjectIdentifier(ship.node)
+        shipKillTimes[key] = time
+        
+        // Also update legacy kill time variables for backward compatibility
+        if ship === needle {
+            needleKillTime = time
+        } else if ship === dart {
+            dartKillTime = time
+        }
+    }
+    
+    private func getKillTime(for ship: Ship) -> TimeInterval {
+        let key = ObjectIdentifier(ship.node)
+        return shipKillTimes[key] ?? 0
     }
 
     // MARK: - Missiles
@@ -1466,8 +1358,6 @@ final class GameScene: SKScene {
     }
 
     private func startNewMatch() {
-        // Preserve the current virtual screen setting before anything is reset
-        savedVirtualScreenSelection = virtualScreenSelection
         needleScore = 0; dartScore = 0
         updateScoreDisplays()
         enableRandomRespawn = false
@@ -1491,12 +1381,12 @@ final class GameScene: SKScene {
         gameOverAnimationStartTime = 0
         victorLabelNode?.removeFromParent(); victorLabelNode = nil
         gameOverLabelNode?.removeFromParent(); gameOverLabelNode = nil
-        // Restore the player's virtual screen preference that was saved at game-over time
-        if virtualScreenSelection != savedVirtualScreenSelection {
-            virtualScreenSelection = savedVirtualScreenSelection
-            virtualScreenMode = virtualScreenSelection == 0 ? .off : .medium
-            applyVirtualScreenMode()
-        }
+        
+        // restore the user's explicitly chosen screen size
+        virtualScreenSelection = savedVirtualScreenSelection
+        virtualScreenMode = virtualScreenSelection == 0 ? .off : .medium
+        applyVirtualScreenMode()
+
         updateNeedleControlsVisibility()
         updateWedgeControlsVisibility()
         if virtualScreenMode != .off {
@@ -1505,60 +1395,75 @@ final class GameScene: SKScene {
             cameraNode.position = cameraCenter
         }
         refreshOptionsUI()
+        
+        // Start countdown timer
+        startCountdown()
     }
 
     // MARK: - Score rendering
 
-    private func createDigitNode(_ digit: Int, scale: CGFloat = 1.0) -> SKShapeNode {
-        let A = (CGPoint(x: 1, y: 15), CGPoint(x: 9, y: 15))
-        let B = (CGPoint(x: 9, y: 15), CGPoint(x: 9, y: 8))
-        let C = (CGPoint(x: 9, y: 8),  CGPoint(x: 9, y: 1))
-        let D = (CGPoint(x: 1, y: 1),  CGPoint(x: 9, y: 1))
-        let E = (CGPoint(x: 1, y: 8),  CGPoint(x: 1, y: 1))
-        let F = (CGPoint(x: 1, y: 15), CGPoint(x: 1, y: 8))
-        let G = (CGPoint(x: 1, y: 8),  CGPoint(x: 9, y: 8))
-        let segments = [A, B, C, D, E, F, G]
-        let map: [Int: [Int]] = [
-            0:[0,1,2,3,4,5], 1:[1,2], 2:[0,1,6,4,3], 3:[0,1,6,2,3],
-            4:[5,6,1,2], 5:[0,5,6,2,3], 6:[0,5,6,2,3,4],
-            7:[0,1,2], 8:[0,1,2,3,4,5,6], 9:[0,1,2,3,5,6]
-        ]
-        let path = CGMutablePath()
-        for idx in map[digit] ?? [] {
-            let (p1, p2) = segments[idx]
-            path.move(to: CGPoint(x: p1.x * scale, y: p1.y * scale))
-            path.addLine(to: CGPoint(x: p2.x * scale, y: p2.y * scale))
-        }
-        let node = SKShapeNode(path: path)
-        node.strokeColor = .white; node.lineWidth = 2; node.glowWidth = 3; node.zPosition = 60
-        return node
-    }
-
-    private func makeScoreNode(score: Int, scale: CGFloat = 1.2, spacing: CGFloat = 12) -> SKNode {
-        let container = SKNode()
-        let digits = Array(String(score))
-        var x: CGFloat = 0
-        for ch in digits {
-            if let d = Int(String(ch)) {
-                let dn = createDigitNode(d, scale: scale)
-                dn.position = CGPoint(x: x, y: 0)
-                container.addChild(dn)
-                x += spacing * scale
-            }
-        }
-        if digits.isEmpty { container.addChild(createDigitNode(0, scale: scale)) }
-        return container
-    }
-
     private func updateScoreDisplays() {
         needleScoreNode.removeAllChildren(); dartScoreNode.removeAllChildren()
-        let left = makeScoreNode(score: needleScore)
-        let right = makeScoreNode(score: dartScore)
+        let left = VectorTextRenderer.makeScoreNode(score: needleScore)
+        let right = VectorTextRenderer.makeScoreNode(score: dartScore)
         left.position = .zero
         right.position = CGPoint(x: -right.calculateAccumulatedFrame().width, y: 0)
         needleScoreNode.addChild(left); dartScoreNode.addChild(right)
     }
+    
+    // MARK: - Countdown Timer
+    
+    private func startCountdown() {
+        countdownActive = true
+        countdownStartTime = CACurrentMediaTime()
+        lastDisplayedCountdownNumber = -1
 
+        if countdownContainerNode == nil {
+            let container = SKNode()
+            container.zPosition = 1000
+            addChild(container)
+            countdownContainerNode = container
+        }
+        countdownContainerNode!.position = CGPoint(x: cameraCenter.x,
+                                                   y: cameraCenter.y + size.height * 0.28)
+    }
+    
+    private func updateCountdown(currentTime: TimeInterval) {
+        guard countdownActive else { return }
+
+        let elapsed  = currentTime - countdownStartTime
+        let remaining = 5 - Int(elapsed)
+
+        if remaining > 0 {
+            // Keep the label above centre even if the camera has moved
+            countdownContainerNode?.position = CGPoint(x: cameraCenter.x,
+                                                       y: cameraCenter.y + size.height * 0.28)
+
+            if remaining != lastDisplayedCountdownNumber {
+                lastDisplayedCountdownNumber = remaining
+                countdownContainerNode?.removeAllChildren()
+
+                let scale: CGFloat   = 3.0
+                let spacing: CGFloat = 5.0
+                let text = "\(remaining)"
+                let w    = VectorTextRenderer.vectorWordWidth(text, scale: scale, spacing: spacing)
+                let node = VectorTextRenderer.makeVectorWordNode(text, scale: scale, spacing: spacing)
+                node.position = CGPoint(x: -w / 2, y: 0)
+                countdownContainerNode?.addChild(node)
+
+                // Brief scale-down pulse on each new digit
+                countdownContainerNode?.setScale(1.35)
+                countdownContainerNode?.run(.scale(to: 1.0, duration: 0.18))
+            }
+        } else {
+            // Countdown finished — tear down
+            countdownActive = false
+            countdownContainerNode?.removeFromParent()
+            countdownContainerNode = nil
+            lastDisplayedCountdownNumber = -1
+        }
+    }
+    
     // MARK: - Bullet counts
 
     private func bulletsForSelection(_ sel: Int) -> Int? {
@@ -1580,35 +1485,9 @@ final class GameScene: SKScene {
         refreshBulletCounters()
     }
 
-    private func makeVectorInfinityNode(scale: CGFloat) -> SKNode {
-        // Lemniscate drawn in a 20×10 native space — much larger than the 8×12 glyph cell
-        // so it stays legible at small scales. Crosses at centre (10,5); right lobe clockwise,
-        // left lobe counter-clockwise so the path genuinely intersects at the midpoint.
-        let cx: CGFloat = 10, cy: CGFloat = 5
-        let hw: CGFloat = 8.0, hh: CGFloat = 3.5
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: cx, y: cy))
-        path.addCurve(to: CGPoint(x: cx + hw, y: cy),
-                      control1: CGPoint(x: cx + hw * 0.45, y: cy + hh),
-                      control2: CGPoint(x: cx + hw,        y: cy + hh))
-        path.addCurve(to: CGPoint(x: cx, y: cy),
-                      control1: CGPoint(x: cx + hw,        y: cy - hh),
-                      control2: CGPoint(x: cx + hw * 0.45, y: cy - hh))
-        path.addCurve(to: CGPoint(x: cx - hw, y: cy),
-                      control1: CGPoint(x: cx - hw * 0.45, y: cy - hh),
-                      control2: CGPoint(x: cx - hw,        y: cy - hh))
-        path.addCurve(to: CGPoint(x: cx, y: cy),
-                      control1: CGPoint(x: cx - hw,        y: cy + hh),
-                      control2: CGPoint(x: cx - hw * 0.45, y: cy + hh))
-        let node = SKShapeNode(path: path)
-        node.strokeColor = .white; node.fillColor = .clear
-        node.lineWidth = 1.0; node.glowWidth = 4.0; node.alpha = 1.0
-        node.lineCap = .round
-        node.setScale(scale)
-        return node
+    private func makeInfinityNode() -> SKNode { 
+        VectorTextRenderer.makeVectorInfinityNode(scale: 0.85) 
     }
-
-    private func makeInfinityNode() -> SKNode { makeVectorInfinityNode(scale: 0.85) }
 
     private func refreshBulletCounters() {
         let bulletScale: CGFloat = 0.85
@@ -1618,12 +1497,12 @@ final class GameScene: SKScene {
             node.removeAllChildren()
             let content: SKNode
             if count == Int.max {
-                content = makeVectorInfinityNode(scale: bulletScale)
+                content = VectorTextRenderer.makeVectorInfinityNode(scale: bulletScale)
                 // Centre: native space is 20×10, so offset by half at scale
                 content.position = CGPoint(x: -10 * bulletScale, y: -5 * bulletScale)
             } else {
-                content = makeVectorWordNode("\(count)", scale: bulletScale, spacing: bulletSpacing, bright: true)
-                let w = vectorWordWidth("\(count)", scale: bulletScale, spacing: bulletSpacing)
+                content = VectorTextRenderer.makeVectorWordNode("\(count)", scale: bulletScale, spacing: bulletSpacing, bright: true)
+                let w = VectorTextRenderer.vectorWordWidth("\(count)", scale: bulletScale, spacing: bulletSpacing)
                 content.position = CGPoint(x: -w / 2, y: -6 * bulletScale)
             }
             node.addChild(content)
@@ -1655,9 +1534,6 @@ final class GameScene: SKScene {
         dartBulletsRemaining   = Int.max
         refreshBulletCounters()
 
-        // Save the player's virtual screen preference; the 3000×3000 switch is deferred to animation start
-        savedVirtualScreenSelection = virtualScreenSelection
-
         let now = CACurrentMediaTime()
         gameOverAnimationStartTime = now + 5.0
 
@@ -1678,12 +1554,6 @@ final class GameScene: SKScene {
         #endif
     }
 
-    private func vectorWordWidth(_ text: String, scale: CGFloat, spacing: CGFloat) -> CGFloat {
-        let n = CGFloat(text.count)
-        guard n > 0 else { return 0 }
-        return ((n - 1) * (8 + spacing) + 8) * scale
-    }
-
     private func showVictorLabel() {
         victorLabelNode?.removeFromParent()
         let sh = size.height, sw = size.width
@@ -1698,13 +1568,13 @@ final class GameScene: SKScene {
         let scale: CGFloat = 1.2; let spacing: CGFloat = 5
         if needleScore == dartScore {
             for (text, cx) in [("TIE", needleCX), ("TIE", dartCX)] {
-                let w = vectorWordWidth(text, scale: scale, spacing: spacing)
-                let node = makeVectorWordNode(text, scale: scale, spacing: spacing)
+                let w = VectorTextRenderer.vectorWordWidth(text, scale: scale, spacing: spacing)
+                let node = VectorTextRenderer.makeVectorWordNode(text, scale: scale, spacing: spacing)
                 node.position = CGPoint(x: cx - w/2, y: labelY); container.addChild(node)
             }
         } else {
-            let w = vectorWordWidth("WINNER", scale: scale, spacing: spacing)
-            let word = makeVectorWordNode("WINNER", scale: scale, spacing: spacing)
+            let w = VectorTextRenderer.vectorWordWidth("WINNER", scale: scale, spacing: spacing)
+            let word = VectorTextRenderer.makeVectorWordNode("WINNER", scale: scale, spacing: spacing)
             let edgeInset: CGFloat = 12
             let startX: CGFloat = needleScore > dartScore
                 ? -sw/2 + edgeInset
@@ -1716,245 +1586,21 @@ final class GameScene: SKScene {
     private func showGameOverLabel() {
         gameOverLabelNode?.removeFromParent()
         let text = "GAME OVER", scale: CGFloat = 2.4, spacing: CGFloat = 5
-        let phrase = makeVectorWordNode(text, scale: scale, spacing: spacing)
+        let phrase = VectorTextRenderer.makeVectorWordNode(text, scale: scale, spacing: spacing)
         phrase.zPosition = 80
-        let w = vectorWordWidth(text, scale: scale, spacing: spacing)
+        let w = VectorTextRenderer.vectorWordWidth(text, scale: scale, spacing: spacing)
         phrase.position = CGPoint(x: -w/2, y: size.height / 6)
         cameraNode.addChild(phrase); gameOverLabelNode = phrase
     }
 
-    private func makeVectorWordNode(_ text: String, scale: CGFloat, spacing: CGFloat, bright: Bool = false) -> SKNode {
-        let container = SKNode()
-        var cursorX: CGFloat = 0
-        let sw: CGFloat = bright ? 1.0 : 0.5
-        let segAlpha: CGFloat = bright ? 1.0 : 0.4
-        let dotAlpha: CGFloat = bright ? 1.0 : 0.7
-        let segGlow: CGFloat  = bright ? 4.0 : 0.0
-        let glyphs: [Character: [(CGFloat,CGFloat,CGFloat,CGFloat)]] = [
-            "0": [(0,2,0,10),(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2)],
-            "1": [(2,10,4,12),(4,12,4,0),(0,0,8,0)],
-            "2": [(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,0,0),(0,0,8,0)],
-            "3": [(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,6,6),(2,6,6,6),(6,6,8,5),(8,5,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2)],
-            "4": [(0,12,0,6),(0,6,8,6),(6,12,6,0)],
-            "5": [(8,12,0,12),(0,12,0,7),(0,7,6,7),(6,7,8,5),(8,5,8,2),(8,2,6,0),(6,0,0,0)],
-            "6": [(8,10,6,12),(6,12,2,12),(2,12,0,10),(0,10,0,2),(0,2,2,0),(2,0,6,0),(6,0,8,2),(8,2,8,5),(8,5,0,5)],
-            "7": [(0,12,8,12),(8,12,4,0)],
-            "8": [(2,6,0,8),(0,8,0,10),(0,10,2,12),(2,12,6,12),(6,12,8,10),(8,10,8,8),(8,8,6,6),(6,6,2,6),(2,6,0,4),(0,4,0,2),(0,2,2,0),(2,0,6,0),(6,0,8,2),(8,2,8,4),(8,4,6,6)],
-            "9": [(8,2,6,0),(6,0,2,0),(2,0,0,2),(0,2,0,5),(0,5,8,5),(8,5,8,10),(8,10,6,12),(6,12,2,12),(2,12,0,10)],
-            "A": [(0,0,2,6),(2,6,4,12),(8,0,6,6),(6,6,4,12),(2,6,6,6)],
-            "B": [(0,0,0,12),(0,12,5,12),(5,12,7,10),(7,10,7,7),(7,7,5,6),(5,6,0,6),
-                  (0,6,5,6),(5,6,7,4),(7,4,7,1),(7,1,5,0),(5,0,0,0)],
-            "C": [(7,11,6,12),(6,12,2,12),(2,12,0,10),(0,10,0,2),(0,2,2,0),(2,0,6,0),(6,0,7,1)],
-            "D": [(0,0,0,12),(0,12,5,12),(5,12,8,9),(8,9,8,3),(8,3,5,0),(5,0,0,0)],
-            "E": [(0,12,0,6),(0,6,0,0),(0,12,8,12),(0,6,6,6),(0,0,8,0)],
-            "F": [(0,12,0,6),(0,6,0,0),(0,12,8,12),(0,6,6,6)],
-            "G": [(7,11,6,12),(6,12,2,12),(2,12,0,10),(0,10,0,2),(0,2,2,0),(2,0,6,0),
-                  (6,0,8,2),(8,2,8,6),(8,6,4,6)],
-            "H": [(0,0,0,6),(0,6,0,12),(8,0,8,6),(8,6,8,12),(0,6,8,6)],
-            "I": [(2,12,4,12),(4,12,6,12),(4,12,4,0),(2,0,4,0),(4,0,6,0)],
-            "J": [(2,12,6,12),(6,12,8,12),(6,12,6,2),(6,2,4,0),(4,0,0,0)],
-            "K": [(0,0,0,6),(0,6,0,12),(0,6,8,12),(0,6,8,0)],
-            "L": [(0,12,0,0),(0,0,8,0)],
-            "M": [(0,0,0,12),(0,12,4,6),(4,6,8,12),(8,12,8,0)],
-            "N": [(0,0,0,12),(0,12,8,0),(8,0,8,12)],
-            "O": [(2,12,6,12),(6,12,8,10),(8,10,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2),(0,2,0,10),(0,10,2,12)],
-            "P": [(0,0,0,12),(0,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,6,6),(6,6,0,6)],
-            "Q": [(2,12,6,12),(6,12,8,10),(8,10,8,2),(8,2,6,0),(6,0,2,0),(2,0,0,2),
-                  (0,2,0,10),(0,10,2,12),(5,3,9,0)],
-            "R": [(0,0,0,12),(0,12,6,12),(6,12,8,10),(8,10,8,7),(8,7,6,6),(6,6,0,6),(4,6,8,0)],
-            "S": [(7,11,6,12),(6,12,2,12),(2,12,0,10),(0,10,0,7),(0,7,2,6),(2,6,6,6),
-                  (6,6,8,4),(8,4,8,1),(8,1,6,0),(6,0,2,0),(2,0,0,2)],
-            "T": [(0,12,4,12),(4,12,8,12),(4,12,4,0)],
-            "U": [(0,12,0,2),(0,2,2,0),(2,0,6,0),(6,0,8,2),(8,2,8,12)],
-            "V": [(0,12,4,0),(4,0,8,12)],
-            "W": [(0,12,0,0),(0,0,4,6),(4,6,8,0),(8,0,8,12)],
-            "X": [(0,12,4,6),(4,6,8,0),(0,0,4,6),(4,6,8,12)],
-            "Y": [(0,12,4,6),(8,12,4,6),(4,6,4,0)],
-            "Z": [(0,12,8,12),(8,12,0,0),(0,0,8,0)],
-            " ": [],
-        ]
-        for ch in text.uppercased() {
-            let segs = glyphs[ch] ?? []
-            let holder = SKNode(); holder.position = CGPoint(x: cursorX, y: 0)
-            for (x1,y1,x2,y2) in segs {
-                let p = CGMutablePath()
-                p.move(to: CGPoint(x: x1, y: y1)); p.addLine(to: CGPoint(x: x2, y: y2))
-                let s = SKShapeNode(path: p)
-                s.strokeColor = .white; s.lineWidth = sw; s.glowWidth = segGlow
-                s.lineCap = .butt; s.alpha = segAlpha; holder.addChild(s)
-            }
-            var tally: [String: (CGFloat, CGFloat, Int)] = [:]
-            for (x1,y1,x2,y2) in segs {
-                for (px,py) in [(x1,y1),(x2,y2)] {
-                    let key = "\(px),\(py)"
-                    tally[key] = (px, py, (tally[key]?.2 ?? 0) + 1)
-                }
-            }
-            let hs = sw * 0.5
-            for (_, entry) in tally where entry.2 >= 2 {
-                let rect = CGRect(x: entry.0 - hs, y: entry.1 - hs, width: sw, height: sw)
-                let dot = SKShapeNode(rect: rect)
-                dot.fillColor = .white; dot.strokeColor = .clear
-                dot.glowWidth = sw * 1.5; dot.alpha = dotAlpha; dot.zPosition = 1
-                holder.addChild(dot)
-            }
-            container.addChild(holder); cursorX += (8 + spacing)
-        }
-        container.setScale(scale)
-        return container
-    }
-
     // MARK: - Stars, boundary, camera, arrows
-
-    /// Bright naked-eye stars visible from New York City (lat 41°N).
-    /// Tuples: (RA in decimal hours, Dec in degrees, apparent magnitude)
-    private static let nycStarData: [(Float, Float, Float)] = [
-        // Orion
-        (5.92, 7.41, 0.42),  (5.24,-8.20, 0.13),  (5.42, 6.35, 1.64),
-        (5.53,-0.30, 2.23),  (5.60,-1.20, 1.70),  (5.68,-1.94, 1.74),
-        (5.80,-9.67, 2.06),  (6.07,14.77, 2.77),  (5.59, 9.93, 3.19),
-        (5.33,-6.84, 3.39),  (4.83, 6.96, 3.36),  (5.91, 3.56, 3.35),
-        (5.20, 2.86, 3.73),  (5.62, 5.60, 3.60),  (5.18,-8.75, 3.79),
-        // Taurus
-        (4.60,16.51, 0.87),  (5.44,28.61, 1.65),  (3.79,24.11, 2.87),
-        (4.33,15.63, 2.97),  (4.01,12.49, 3.00),  (4.70,22.96, 3.41),
-        (3.45, 9.73, 3.33),  (4.48,19.18, 3.27),  (4.28,15.87, 3.76),
-        (3.53, 0.40, 3.63),  (5.62,21.14, 3.65),  (4.11,22.29, 3.76),
-        // Canis Major
-        (6.75,-16.72,-1.46), (7.14,-26.39, 1.50), (6.94,-28.97, 2.45),
-        (7.40,-29.30, 1.84), (7.03,-27.93, 3.02), (6.38,-17.96, 3.02),
-        (6.90,-12.04, 3.95), (7.08,-23.83, 3.02), (6.64,-19.26, 3.83),
-        // Canis Minor
-        (7.65, 5.22, 0.38),  (7.45, 8.29, 2.89),
-        // Gemini
-        (7.75,28.03, 1.14),  (7.58,31.88, 1.58),  (7.07,20.57, 3.18),
-        (6.63,25.13, 3.36),  (6.38,22.51, 3.00),  (6.73,16.40, 3.26),
-        (7.34,21.98, 3.36),  (7.18,30.24, 3.53),  (7.30,16.54, 3.78),
-        (6.90,13.18, 3.60),
-        // Auriga
-        (5.28,46.00, 0.08),  (5.99,44.95, 1.90),  (5.11,41.23, 2.69),
-        (5.04,43.82, 3.18),  (4.95,33.17, 3.18),  (5.57,40.10, 3.68),
-        (5.19,34.98, 3.71),
-        // Perseus
-        (3.41,49.86, 1.79),  (3.08,40.96, 2.12),  (3.96,40.01, 2.90),
-        (3.72,32.29, 2.91),  (3.17,44.86, 3.03),  (3.54,47.79, 3.77),
-        (4.11,47.71, 2.84),  (3.08,53.51, 3.76),  (3.96,35.79, 3.83),
-        (2.73,49.23, 3.84),  (4.24,48.40, 3.80),
-        // Cassiopeia
-        (0.15,59.15, 2.28),  (0.68,56.54, 2.23),  (0.95,60.72, 2.47),
-        (1.43,60.24, 2.68),  (1.91,63.67, 2.73),  (2.85,55.90, 2.85),
-        (0.45,48.29, 3.38),  (0.28,59.18, 3.46),  (1.04,54.52, 3.67),
-        (1.67,72.42, 3.34),
-        // Ursa Major
-        (11.06,61.75, 1.79), (11.03,56.38, 2.37), (11.90,53.69, 2.44),
-        (12.90,55.96, 1.76), (13.40,54.93, 2.04), (13.79,49.31, 1.86),
-        (12.26,57.03, 3.31), (10.37,41.50, 3.45), (9.87,59.04, 3.01),
-        (9.52,51.68, 3.17),  (8.49,60.71, 3.67),  (9.06,47.16, 3.68),
-        (10.28,55.96, 3.71), (11.76,47.78, 3.65), (12.52,41.50, 3.45),
-        // Ursa Minor
-        (2.53,89.26, 1.97),  (14.85,74.16, 2.08), (15.73,77.79, 3.05),
-        (16.29,75.75, 4.25), (17.54,86.59, 4.23), (16.77,82.04, 4.32),
-        // Boötes
-        (14.26,19.18,-0.05), (13.91,18.40, 2.68), (14.75,27.07, 2.35),
-        (15.03,40.39, 3.58), (14.53,30.37, 3.49), (15.25,33.31, 3.46),
-        (13.82,15.80, 3.47), (14.35,46.09, 3.49), (13.67,17.46, 3.58),
-        (14.06,13.73, 3.65),
-        // Leo
-        (10.14,11.97, 1.36), (11.82,14.57, 2.14), (10.33,19.84, 2.97),
-        (11.24,15.43, 3.34), (11.19,20.52, 3.88), (10.12,16.76, 3.52),
-        (9.76,23.77, 3.44),  (9.52,26.01, 4.31),  (10.89,34.21, 3.32),
-        (9.68,9.89, 3.61),   (10.12,11.50, 4.08),
-        // Virgo
-        (13.42,-11.16, 1.04),(13.58,-0.60, 2.75), (12.69,-1.45, 2.83),
-        (13.17, 3.40, 2.75), (12.33, 3.40, 3.61), (12.90,-3.40, 3.38),
-        (13.57,10.96, 3.61), (14.72, 1.89, 3.87),
-        // Hercules
-        (17.24,14.39, 2.78), (16.50,21.49, 2.77), (17.39,24.84, 3.15),
-        (17.25,36.81, 3.47), (16.97,31.60, 3.16), (17.94,37.25, 3.80),
-        (17.00,30.92, 3.87), (16.36,19.15, 3.14), (17.66,46.01, 3.14),
-        (16.69,38.92, 3.87), (17.08,33.56, 4.16),
-        // Ophiuchus
-        (17.17,-15.72, 2.43),(17.59,12.56, 2.08), (16.62,-10.57, 2.56),
-        (17.43,-29.87, 2.60),(16.24,-3.69, 2.77), (17.72,-9.77, 3.20),
-        (17.98,-9.77, 3.27), (18.01,-8.18, 3.34), (17.36,-24.99, 3.62),
-        // Corona Borealis
-        (15.58,26.71, 2.22), (15.70,26.30, 3.84), (15.96,29.11, 3.83),
-        (16.00,33.86, 4.14), (15.46,29.11, 4.15), (15.55,31.36, 4.62),
-        // Lyra
-        (18.62,38.78, 0.03), (18.74,39.67, 3.52), (18.83,33.36, 3.24),
-        (18.90,36.90, 4.36), (18.91,43.95, 4.60),
-        // Cygnus
-        (20.69,45.28, 1.25), (20.37,40.26, 2.23), (19.51,27.96, 3.09),
-        (19.74,45.13, 2.46), (21.22,30.23, 2.48), (19.94,35.08, 2.87),
-        (20.19,40.44, 3.20), (19.61,50.22, 3.21), (21.29,36.64, 3.72),
-        (20.77,33.97, 3.79), (21.71,38.75, 3.80), (20.54,47.72, 3.80),
-        (20.92,43.93, 3.93),
-        // Aquila
-        (19.85, 8.87, 0.77), (19.77,10.61, 3.23), (19.10,13.86, 2.72),
-        (20.01,-0.82, 3.36), (19.43,-0.82, 3.44), (19.92, 6.40, 3.37),
-        (19.09, 3.12, 3.71),
-        // Draco
-        (17.94,51.49, 2.23), (14.07,64.37, 3.67), (16.40,61.51, 2.79),
-        (17.15,65.71, 3.29), (19.80,70.27, 3.65), (11.52,69.33, 3.84),
-        (17.51,52.30, 3.07), (18.35,72.73, 3.07), (17.89,56.87, 3.17),
-        (16.03,58.57, 3.73), (15.41,58.97, 3.84),
-        // Cepheus
-        (21.31,62.59, 2.45), (22.83,66.20, 3.21), (23.66,77.63, 3.52),
-        (22.49,58.42, 3.35), (21.31,70.56, 3.43), (20.75,77.71, 3.23),
-        (22.19,57.04, 3.51),
-        // Pegasus
-        (22.69,10.83, 2.38), (23.08,28.08, 2.42), (23.07,15.21, 2.49),
-        (21.74, 9.87, 2.49), (22.17, 6.20, 3.40), (22.72,30.22, 3.40),
-        (22.02,19.80, 3.47), (21.37,19.48, 3.51), (22.83,24.60, 3.60),
-        // Andromeda
-        (0.14,29.09, 2.07),  (2.12,23.46, 2.01),  (1.91,20.81, 2.64),
-        (0.08,29.09, 2.07),  (2.07,42.33, 2.07),  (1.89,20.81, 2.10),
-        (2.16,39.24, 3.27),  (2.83,27.26, 3.61),  (0.61,30.86, 4.09),
-        (0.43,33.72, 4.01),
-        // Aries
-        (2.12,23.46, 2.01),  (1.89,23.46, 3.17),  (2.83,27.26, 3.61),
-        (2.56,21.34, 4.35),  (1.73,19.29, 3.86),
-        // Piscis Austrinus
-        (22.96,-29.62, 1.16),(21.79,-32.53, 4.20),(22.52,-32.35, 4.29),
-        // Cetus
-        (2.72, 3.24, 2.04),  (3.04, 4.09, 2.54),  (1.73,-15.94, 3.47),
-        (0.73,-17.99, 2.04), (0.44,-75.20, 3.99), (2.46,-0.33, 3.47),
-        (2.33,-2.98, 3.56),  (1.14,-10.18, 3.73), (2.99,-8.90, 4.07),
-        // Aquarius
-        (22.09,-0.32, 2.91), (22.36,-1.39, 3.27), (21.53,-16.66, 3.57),
-        (21.63,-22.41, 3.08),(22.48,-0.02, 3.78), (22.88,-15.82, 3.84),
-        (22.83,-13.59, 3.97),
-        // Pisces
-        (2.04, 2.76, 3.62),  (1.56,15.35, 4.01),  (1.03,21.03, 3.82),
-        (1.76, 9.16, 3.70),  (23.67, 5.63, 3.62),
-        // Capricornus
-        (20.79,-26.92, 3.07),(21.53,-16.66, 3.57),(21.63,-22.41, 3.08),
-        (20.30,-12.54, 3.68),(21.10,-25.27, 3.58),
-        // Sagittarius (barely visible from NYC)
-        (18.29,-29.83, 1.85),(18.40,-34.38, 2.05),(18.92,-26.30, 2.60),
-        (19.04,-29.88, 2.98),(18.35,-29.83, 3.11),
-        // Scorpius (low but visible from NYC in summer)
-        (16.49,-26.43, 1.09),(16.00,-22.62, 2.32),(17.62,-43.00, 1.86),
-        (17.71,-39.03, 2.70),(17.83,-37.10, 2.41),
-        // Cancer
-        (8.74,18.15, 3.52),  (8.97,11.86, 3.94),  (8.28,9.19, 3.94),
-        (8.72,21.47, 3.53),
-        // Hydra
-        (9.46,-8.66, 1.98),  (10.18,-12.35, 3.11),(8.92, 5.95, 3.83),
-        (9.66,-1.14, 3.54),  (10.43,-16.84, 3.25),
-        // Centaurus (partial, decl > -50 only)
-        (14.06,-60.37, -0.29),(14.66,-60.84, 0.61),
-        // Crater / Corvus
-        (11.40,-22.83, 4.08),(12.17,-22.62, 2.59),(12.08,-24.73, 3.02),
-        (12.14,-17.54, 3.11),(12.50,-16.52, 3.88),
-    ]
 
     private func setupStars() {
         for s in starNodes { s.removeFromParent() }
         starNodes.removeAll()
         let vw = virtualWorldWidth, vh = virtualWorldHeight
         let refW: CGFloat = 3000, refH: CGFloat = 3000
-        for (ra, dec, mag) in GameScene.nycStarData {
+        for (ra, dec, mag) in StarfieldData.nycStarData {
             // PATCH 1 — Map RA 0–24h → x across refW.
             // The dataset spans ≈ −75° … +89° dec; map the full −80°…+90° window
             // (170°) so stars are distributed across the entire 3000×3000 field.
@@ -2327,37 +1973,10 @@ final class GameScene: SKScene {
         wrapBtn.strokeColor = .white; wrapBtn.lineWidth = 2; wrapBtn.zPosition = 202; overlay.addChild(wrapBtn)
         wrapBtn.addChild(makeTabInnerLabel("Wrap")); edgeWrapButton = wrapBtn
 
-        let sunRowLabel = SKLabelNode(text: "Sun at Center:")
-        sunRowLabel.name = "env_label_sun"
-        sunRowLabel.fontName = "AvenirNext-Bold"; sunRowLabel.fontSize = 16
-        sunRowLabel.fontColor = .white; sunRowLabel.verticalAlignmentMode = .center
-        sunRowLabel.horizontalAlignmentMode = .right
-        sunRowLabel.position = CGPoint(x: -8, y: h/2 - 222); sunRowLabel.zPosition = 202
-        overlay.addChild(sunRowLabel)
-
-        let sunBtn = SKShapeNode(rectOf: CGSize(width: 60, height: 30), cornerRadius: 6)
-        sunBtn.name = "opt_sun_toggle"; sunBtn.position = CGPoint(x: 46, y: h/2 - 222)
-        sunBtn.strokeColor = .white; sunBtn.lineWidth = 2; sunBtn.zPosition = 202
-        overlay.addChild(sunBtn); sunToggleButton = sunBtn
-        sunBtn.addChild(makeTabInnerLabel("ON"))
-
-        let bulletLbl = SKLabelNode(text: "Affects Bullets:")
-        bulletLbl.name = "env_label_affects"; bulletLbl.fontName = "AvenirNext-Bold"; bulletLbl.fontSize = 14
-        bulletLbl.fontColor = .white; bulletLbl.verticalAlignmentMode = .center
-        bulletLbl.horizontalAlignmentMode = .left
-        bulletLbl.position = CGPoint(x: -118, y: h/2 - 339); bulletLbl.zPosition = 203
-        overlay.addChild(bulletLbl); bulletGravLabel = bulletLbl
-
-        let bulletBtn = SKShapeNode(rectOf: CGSize(width: 60, height: 30), cornerRadius: 6)
-        bulletBtn.name = "opt_bullet_grav_toggle"; bulletBtn.position = CGPoint(x: 88, y: h/2 - 339)
-        bulletBtn.strokeColor = .white; bulletBtn.lineWidth = 2; bulletBtn.zPosition = 202
-        overlay.addChild(bulletBtn); bulletGravToggleButton = bulletBtn
-        bulletBtn.addChild(makeTabInnerLabel("ON"))
-
-        let gravityHeading = makeLabel("Gravity", y: h/2 - 302, name: "env_label_gravity")
+        let gravityHeading = makeLabel("Gravity", y: h/2 - 222, name: "env_label_gravity")
         overlay.addChild(gravityHeading)
 
-        let gravTrackY: CGFloat = h/2 - 392
+        let gravTrackY: CGFloat = h/2 - 312
         let gravTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
         gravTrack.strokeColor = .white; gravTrack.fillColor = .white
         gravTrack.position = CGPoint(x: 0, y: gravTrackY)
@@ -2740,29 +2359,6 @@ final class GameScene: SKScene {
         wedgeAIToggleButton?.fillColor = wedgeAIEnabled  ? selFill : offFill
         aimPersistToggleButton?.fillColor = aimPersistsAfterLift ? selFill : offFill
 
-        if let b = sunToggleButton {
-            styleBtn(b, selected: sunEnabled)
-            if let lbl = b.children.compactMap({ $0 as? SKLabelNode }).first {
-                lbl.text = sunEnabled ? "ON" : "OFF"
-            }
-        }
-        if let b = bulletGravToggleButton {
-            styleBtn(b, selected: sunAffectsBullets)
-            if let lbl = b.children.compactMap({ $0 as? SKLabelNode }).first {
-                lbl.text = sunAffectsBullets ? "ON" : "OFF"
-            }
-        }
-
-        func setEnabled(_ node: SKNode?, enabled: Bool) { node?.alpha = enabled ? 1.0 : 0.5 }
-        setEnabled(bulletGravToggleButton, enabled: sunEnabled)
-        bulletGravLabel?.alpha = sunEnabled ? 1.0 : 0.5
-
-        let gravAlpha: CGFloat = sunEnabled ? 1.0 : 0.5
-        gravitySliderTrack?.alpha = gravAlpha
-        gravitySliderKnob?.alpha  = gravAlpha
-        gravityValueLabel?.alpha  = gravAlpha
-        optionsOverlay?.enumerateChildNodes(withName: "opt_grav_tick_*")    { $0.alpha = gravAlpha; _ = $1 }
-        optionsOverlay?.enumerateChildNodes(withName: "opt_grav_ticklabel_*") { $0.alpha = gravAlpha; _ = $1 }
         if let knob = gravitySliderKnob, let track = gravitySliderTrack {
             let x = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))
             knob.position = CGPoint(x: x, y: track.position.y)
@@ -2770,7 +2366,7 @@ final class GameScene: SKScene {
         gravityValueLabel?.text = gravityLabelText()
 
         if let knob = virtualScreenSliderKnob, let track = virtualScreenSliderTrack {
-            let x = -sliderTrackHalfWidth + CGFloat(virtualScreenSelection) * (sliderTrackWidth / CGFloat(virtualScreenSteps))
+            let x = -sliderTrackHalfWidth + CGFloat(savedVirtualScreenSelection) * (sliderTrackWidth / CGFloat(virtualScreenSteps))
             knob.position = CGPoint(x: x, y: track.position.y)
         }
         if let knob = needleBulletSliderKnob, let track = needleBulletSliderTrack {
@@ -2836,7 +2432,8 @@ final class GameScene: SKScene {
     // MARK: - Sun
 
     private func applySunState() {
-        if sunEnabled {
+        // Sun appears when gravity is enabled (slider > 0)
+        if gravitySliderSelection > 0 {
             if sunNode == nil {
                 let r: CGFloat = 32
                 let path = CGMutablePath()
@@ -2910,6 +2507,15 @@ final class GameScene: SKScene {
         let dt = currentTime - lastUpdateTime
 
         updateCamera(currentTime: currentTime, dt: dt)
+        
+        // Update countdown if active
+        if countdownActive {
+            updateCountdown(currentTime: currentTime)
+            needleTargetIndicator.alpha = 0
+            dartTargetIndicator.alpha = 0
+            lastUpdateTime = currentTime
+            return
+        }
 
         if optionsVisible {
             needleTargetIndicator.alpha = 0
@@ -3552,8 +3158,8 @@ final class GameScene: SKScene {
 
         } // end delay guard (!gameOver || past animation start)
 
-        // Gravity
-        if sunEnabled, let sun = sunNode {
+        // Gravity - sun exists when gravity slider > 0
+        if let sun = sunNode {
             func applyGravity(to ship: Ship) {
                 let dx = sun.position.x - ship.node.position.x
                 let dy = sun.position.y - ship.node.position.y
@@ -3567,20 +3173,18 @@ final class GameScene: SKScene {
             if !needle.node.isHidden { applyGravity(to: needle) }
             if !dart.node.isHidden   { applyGravity(to: dart) }
 
-            if sunAffectsBullets {
-                enumerateChildNodes(withName: "missile") { node, _ in
-                    guard let data = node.userData,
-                          var vx = data["vx"] as? CGFloat,
-                          var vy = data["vy"] as? CGFloat else { return }
-                    let dx = sun.position.x - node.position.x
-                    let dy = sun.position.y - node.position.y
-                    let r2 = dx*dx + dy*dy + 100
-                    let invR = 1.0 / sqrt(r2)
-                    let G: CGFloat = 18000 * self.gravityMultiplier * (5.0 / 8.0)
-                    let a = G / r2
-                    vx += dx * invR * a * CGFloat(dt); vy += dy * invR * a * CGFloat(dt)
-                    node.userData?["vx"] = vx; node.userData?["vy"] = vy
-                }
+            enumerateChildNodes(withName: "missile") { node, _ in
+                guard let data = node.userData,
+                      var vx = data["vx"] as? CGFloat,
+                      var vy = data["vy"] as? CGFloat else { return }
+                let dx = sun.position.x - node.position.x
+                let dy = sun.position.y - node.position.y
+                let r2 = dx*dx + dy*dy + 100
+                let invR = 1.0 / sqrt(r2)
+                let G: CGFloat = 18000 * self.gravityMultiplier * (7.0 / 8.0)
+                let a = G / r2
+                vx += dx * invR * a * CGFloat(dt); vy += dy * invR * a * CGFloat(dt)
+                node.userData?["vx"] = vx; node.userData?["vy"] = vy
             }
         }
 
@@ -3706,7 +3310,7 @@ final class GameScene: SKScene {
             }
         }
 
-        if sunEnabled, let sun = sunNode {
+        if let sun = sunNode {
             enumerateChildNodes(withName: "missile") { node, _ in
                 let bdx = node.position.x - sun.position.x
                 let bdy = node.position.y - sun.position.y
@@ -3734,18 +3338,73 @@ final class GameScene: SKScene {
 
         var needleHit = false, dartHit = false
         let now = CACurrentMediaTime()
+        
+        // New generalized collision detection
+        var shipsHit: Set<ObjectIdentifier> = []  // Track which ships were hit this frame
+        
+        // Bullet vs Ship collisions
         enumerateChildNodes(withName: "missile") { node, _ in
-            let owner = self.missileOwner.object(forKey: node)
-            let spawn = self.missileSpawnTime.object(forKey: node)?.doubleValue ?? 0
+            guard let owner = self.missileOwner.object(forKey: node),
+                  let spawn = self.missileSpawnTime.object(forKey: node)?.doubleValue else { return }
+            
             let bounced = (node.userData?["bounced"] as? Bool) ?? false
             let grace = (!bounced) && (now - spawn < 1.0)
-            if !needleHit && !self.needle.node.isHidden && node.frame.intersects(self.needle.node.frame) && !(owner === self.needle.node && grace) {
-                needleHit = true; node.removeFromParent()
-            }
-            if !dartHit && !self.dart.node.isHidden && node.frame.intersects(self.dart.node.frame) && !(owner === self.dart.node && grace) {
-                dartHit = true; node.removeFromParent()
+            
+            // Check collision with ALL ships
+            for ship in self.ships {
+                let shipKey = ObjectIdentifier(ship.node)
+                guard !ship.node.isHidden,
+                      !shipsHit.contains(shipKey),  // Don't hit same ship twice
+                      node.frame.intersects(ship.node.frame) else { continue }
+                
+                // Apply grace period: skip if owner shot itself within 1 second
+                if owner === ship.node && grace { continue }
+                
+                // Valid hit!
+                shipsHit.insert(shipKey)
+                node.removeFromParent()
+                
+                // Update legacy hit flags for backward compatibility
+                if ship === self.needle { needleHit = true }
+                if ship === self.dart { dartHit = true }
+                break  // Bullet can only hit one ship
             }
         }
+        
+        // Ship vs Ship collisions
+        for i in 0..<ships.count {
+            guard !ships[i].node.isHidden else { continue }
+            for j in (i+1)..<ships.count {  // Only check each pair once
+                guard !ships[j].node.isHidden,
+                      ships[i].node.frame.intersects(ships[j].node.frame) else { continue }
+                
+                let key1 = ObjectIdentifier(ships[i].node)
+                let key2 = ObjectIdentifier(ships[j].node)
+                shipsHit.insert(key1)
+                shipsHit.insert(key2)
+                
+                // Update legacy hit flags for backward compatibility
+                if ships[i] === needle || ships[j] === needle { needleHit = true }
+                if ships[i] === dart || ships[j] === dart { dartHit = true }
+            }
+        }
+        
+        // Process all hits using new generalized system
+        for ship in ships {
+            let shipKey = ObjectIdentifier(ship.node)
+            if shipsHit.contains(shipKey) {
+                if !gameOver {
+                    // Award points to all OTHER ships
+                    for otherShip in ships where otherShip !== ship {
+                        incrementScore(for: otherShip)
+                    }
+                }
+                recordKillTime(for: ship, at: currentTime)
+                explodeShip(ship: ship)
+            }
+        }
+        
+        // Keep legacy code path for now (will be redundant but ensures compatibility)
         if needleHit { if !gameOver { dartScore += 1; updateScoreDisplays() }; dartKillTime = currentTime; explodeShip(ship: needle) }
         if dartHit   { if !gameOver { needleScore += 1; updateScoreDisplays() }; needleKillTime = currentTime; explodeShip(ship: dart) }
         if !needle.node.isHidden && !dart.node.isHidden && needle.node.frame.intersects(dart.node.frame) {
@@ -3783,34 +3442,40 @@ final class GameScene: SKScene {
                     setOptionsTab(.shipSelection); handled = true
                 } else if let tab = networkTabButton, tab.contains(locInOverlay) {
                     setOptionsTab(.network); handled = true
-                } else if let btn = aimPersistToggleButton, btn.contains(locInOverlay) {
+                } else if currentOptionsTab == .game,
+                          let btn = aimPersistToggleButton, btn.contains(locInOverlay) {
                     aimPersistsAfterLift.toggle(); refreshOptionsUI(); handled = true
                 }
                 if handled { continue }
-
-                if let btn = edgeBounceButton, btn.contains(locInOverlay) {
-                    edgeBehavior = .bounce; refreshOptionsUI(); handled = true
-                } else if let btn = edgeWrapButton, btn.contains(locInOverlay) {
-                    edgeBehavior = .wrap; refreshOptionsUI(); handled = true
-                } else if let btn = aiToggleButton, btn.contains(locInOverlay) {
-                    needleAIEnabled.toggle()
-                    aiNextThrustToggle = 0; aiNextFireTime = 0; aiThrustOn = false
-                    updateNeedleControlsVisibility(); refreshOptionsUI(); handled = true
-                } else if let btn = wedgeAIToggleButton, btn.contains(locInOverlay) {
-                    wedgeAIEnabled.toggle()
-                    wedgeAINextThrustToggle = 0; wedgeAINextFireTime = 0; wedgeAIThrustOn = false
-                    updateWedgeControlsVisibility(); refreshOptionsUI(); handled = true
-                } else if let btn = sunToggleButton, btn.contains(locInOverlay) {
-                    sunEnabled.toggle(); applySunState(); refreshOptionsUI(); handled = true
-                } else if let btn = bulletGravToggleButton, btn.contains(locInOverlay), sunEnabled {
-                    sunAffectsBullets.toggle(); refreshOptionsUI(); handled = true
-                } else if let btn = overlay.childNode(withName: "game_new_match") as? SKShapeNode, btn.contains(locInOverlay) {
-                    btn.fillColor = .white; btn.strokeColor = .white
-                    btn.children.compactMap { $0 as? SKLabelNode }.forEach { $0.fontColor = .black }
-                    newMatchButtonTouch = touch
-                    handled = true
+                
+                if currentOptionsTab == .environment {
+                    if let btn = edgeBounceButton, btn.contains(locInOverlay) {
+                        edgeBehavior = .bounce; refreshOptionsUI(); handled = true
+                    } else if let btn = edgeWrapButton, btn.contains(locInOverlay) {
+                        edgeBehavior = .wrap; refreshOptionsUI(); handled = true
+                    }
                 }
-
+                if !handled && currentOptionsTab == .ships {
+                    if let btn = aiToggleButton, btn.contains(locInOverlay) {
+                        needleAIEnabled.toggle()
+                        aiNextThrustToggle = 0; aiNextFireTime = 0; aiThrustOn = false
+                        updateNeedleControlsVisibility(); refreshOptionsUI(); handled = true
+                    } else if let btn = wedgeAIToggleButton, btn.contains(locInOverlay) {
+                        wedgeAIEnabled.toggle()
+                        wedgeAINextThrustToggle = 0; wedgeAINextFireTime = 0; wedgeAIThrustOn = false
+                        updateWedgeControlsVisibility(); refreshOptionsUI(); handled = true
+                    }
+                }
+                if !handled && currentOptionsTab == .game {
+                    if let btn = overlay.childNode(withName: "game_new_match") as? SKShapeNode,
+                       btn.contains(locInOverlay) {
+                        btn.fillColor = .white; btn.strokeColor = .white
+                        btn.children.compactMap { $0 as? SKLabelNode }.forEach { $0.fontColor = .black }
+                        newMatchButtonTouch = touch
+                        handled = true
+                    }
+                }
+                
                 if !handled && touchIsOnSlider(track: needleBulletSliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .ships {
                     let kx = -sliderTrackHalfWidth + CGFloat(needleBulletLimitSelection) * (sliderTrackWidth / CGFloat(bulletSliderSteps))
                     if locInOverlay.x < kx - 5 {
@@ -3853,28 +3518,29 @@ final class GameScene: SKScene {
                         virtualScreenSelection = min(virtualScreenSteps, virtualScreenSelection + 1)
                     }
                     virtualScreenMode = [.off, .medium][virtualScreenSelection]
+                    savedVirtualScreenSelection = virtualScreenSelection
                     draggingVirtualScreenSliderTouch = touch
                     applyVirtualScreenMode(); refreshOptionsUI(); handled = true
-                } else if !handled && touchIsOnSlider(track: gravitySliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .environment && sunEnabled {
+                } else if !handled && touchIsOnSlider(track: gravitySliderTrack, locInOverlay: locInOverlay) && currentOptionsTab == .environment {
                     let kx = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))
                     if locInOverlay.x < kx - 5 {
                         gravitySliderSelection = max(0, gravitySliderSelection - 1)
                     } else if locInOverlay.x > kx + 5 {
                         gravitySliderSelection = min(gravitySliderSteps, gravitySliderSelection + 1)
                     }
-                    draggingGravitySliderTouch = touch; refreshOptionsUI(); handled = true
+                    draggingGravitySliderTouch = touch; applySunState(); refreshOptionsUI(); handled = true
                 }
 
                 if handled { continue }
-            }
+                            }
 
-            if optionsButton.contains(location) {
-                setOptionsVisible(!optionsVisible); refreshOptionsUI(); continue
-            }
+                            if optionsButton.contains(location) {
+                                setOptionsVisible(!optionsVisible); refreshOptionsUI(); continue
+                            }
 
-            if optionsVisible { continue }
-            if gameOver { continue }
-
+                            if countdownActive { continue }
+                            if optionsVisible { continue }
+                            if gameOver { continue }
             var consumed = false
 
             if !wedgeAIEnabled && rightThrustButton.contains(location) {
@@ -3910,10 +3576,10 @@ final class GameScene: SKScene {
         }
     }
 
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for touch in touches {
-            if let overlay = optionsOverlay, !overlay.isHidden {
-                let locInOverlay = touch.location(in: overlay)
+override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+    for touch in touches {
+        if let overlay = optionsOverlay, !overlay.isHidden {
+            let locInOverlay = touch.location(in: overlay)
 
                 if draggingNeedleSliderTouch == touch {
                     let idx = sliderIndexForOverlayX(locInOverlay.x)
@@ -3946,6 +3612,7 @@ final class GameScene: SKScene {
                     let idx = max(0, min(virtualScreenSteps, Int(round((locInOverlay.x + sliderTrackHalfWidth) / step))))
                     if virtualScreenSelection != idx {
                         virtualScreenSelection = idx
+                        savedVirtualScreenSelection = virtualScreenSelection
                         virtualScreenMode = [.off, .medium][idx]
                         applyVirtualScreenMode(); refreshOptionsUI()
                     }
@@ -3954,7 +3621,7 @@ final class GameScene: SKScene {
                 if draggingGravitySliderTouch == touch {
                     let step = sliderTrackWidth / CGFloat(gravitySliderSteps)
                     let idx = max(0, min(gravitySliderSteps, Int(round((locInOverlay.x + sliderTrackHalfWidth) / step))))
-                    if gravitySliderSelection != idx { gravitySliderSelection = idx; refreshOptionsUI() }
+                    if gravitySliderSelection != idx { gravitySliderSelection = idx; applySunState(); refreshOptionsUI() }
                     continue
                 }
             }
@@ -3994,11 +3661,12 @@ final class GameScene: SKScene {
                 if dx*dx + dy*dy > 12*12 { fireTouches.removeValue(forKey: id) }
             }
 
-            if optionsVisible { continue }
-            if gameOver { continue }
+        if countdownActive { continue }
+                    if optionsVisible { continue }
+                    if gameOver { continue }
 
-            if !onAnyButton {
-                activeAimTouches.insert(touch); aimPoint = location
+                    if !onAnyButton {
+        activeAimTouches.insert(touch); aimPoint = location
             } else {
                 activeAimTouches.remove(touch)
             }
@@ -4016,10 +3684,11 @@ final class GameScene: SKScene {
             if newMatchButtonTouch == touch {
                 newMatchButtonTouch = nil
                 restoreNewMatchButton()
+                setOptionsVisible(false)   // dismiss panel first
                 startNewMatch()
                 continue
             }
-
+            
             activeAimTouches.remove(touch)
             activeRightThrustTouches.remove(touch)
             #if DEBUG
@@ -4030,12 +3699,13 @@ final class GameScene: SKScene {
             isThrustingNeedle = !activeLeftThrustTouches.isEmpty
             #endif
 
-            if optionsVisible { continue }
-            if gameOver { continue }
+        if countdownActive { continue }
+                if optionsVisible { continue }
+                if gameOver { continue }
 
-            let id = ObjectIdentifier(touch)
-            if let info = fireTouches.removeValue(forKey: id) {
-                let duration = CACurrentMediaTime() - info.startTime
+                let id = ObjectIdentifier(touch)
+                if let info = fireTouches.removeValue(forKey: id) {
+                    let duration = CACurrentMediaTime() - info.startTime
                 let location = touch.location(in: self)
                 if duration < 0.25, let button = info.buttonNode, button.contains(location) {
                     fireMissile(from: info.ship, muzzleOffset: muzzleOffset(for: info.ship))
