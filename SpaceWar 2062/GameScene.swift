@@ -62,21 +62,15 @@ final class GameScene: SKScene {
 
     var lastLaidOutSize: CGSize = .zero
 
-    // FIX #1 — safe-area insets so controls stay below the notch / above home bar
     var safeAreaTopInset:    CGFloat = 0
     var safeAreaBottomInset: CGFloat = 0
 
     enum EdgeBehavior { case bounce, wrap }
     var edgeBehavior: EdgeBehavior = .bounce
 
-    var needleScore: Int = 0
-    var dartScore: Int = 0
-    var needleScoreNode: SKNode!
-    var dartScoreNode: SKNode!
-    
-    // Generalized score tracking for multi-ship support
-    var shipScores: [ObjectIdentifier: Int] = [:]  // Uses ship.node as key
-    var shipKillTimes: [ObjectIdentifier: TimeInterval] = [:]  // Replaces needleKillTime/dartKillTime
+    var shipScores: [ObjectIdentifier: Int] = [:]
+    var shipKillTimes: [ObjectIdentifier: TimeInterval] = [:]
+    var shipStates: [ObjectIdentifier: ShipState] = [:]
 
     var optionsButton: SKShapeNode!
     var optionsOverlay: SKNode?
@@ -96,31 +90,7 @@ final class GameScene: SKScene {
     var networkContainer: SKNode?
     var aboutContainer: SKNode?
 
-    // Needle AI
-    var needleAIEnabled: Bool = false
-    // FIX #9 — 3 levels: 0=basic (current-pos), 1=predictive (quad), 2=expert (strategic)
-    var needleAIIntelligence: Int = 0
-    var aiNextThrustToggle: TimeInterval = 0
-    var aiThrustOn: Bool = false
-    var aiNextFireTime: TimeInterval = 0
-    var aiCertainFireCooldown: TimeInterval = 0
-
-    // Wedge AI
-    var wedgeAIEnabled: Bool = false
-    var wedgeAIIntelligence: Int = 0
-    var wedgeAINextThrustToggle: TimeInterval = 0
-    var wedgeAIThrustOn: Bool = false
-    var wedgeAINextFireTime: TimeInterval = 0
-    var wedgeCertainFireCooldown: TimeInterval = 0
     let neuralAI = NeuralAIController()
-
-    // Observed acceleration for predictive firing
-    var dartPreviousVelocity: CGVector = .zero
-    var dartObservedAcceleration: CGVector = .zero
-    var dartSmoothedAcceleration: CGVector = .zero
-    var needlePreviousVelocity: CGVector = .zero
-    var needleObservedAcceleration: CGVector = .zero
-    var needleSmoothedAcceleration: CGVector = .zero
 
     // Game options
     var aimPersistsAfterLift: Bool = true
@@ -128,48 +98,14 @@ final class GameScene: SKScene {
 
     var activeAimTouches = Set<UITouch>()
 
-    // Post-game-over drift AI
-    var driftNeedleThrustOn: Bool = false
-    var driftDartThrustOn: Bool = false
-    var driftNeedleNextToggle: TimeInterval = 0
-    var driftDartNextToggle: TimeInterval = 0
-    var driftNeedleTargetAngle: CGFloat = 0
-    var driftDartTargetAngle: CGFloat = 0
-    var driftNeedleNextTurn: TimeInterval = 0
-    var driftDartNextTurn: TimeInterval = 0
-
-    // AI intelligence assigned randomly when each ship respawns during game-over mode (0–2)
     var gameOverNeedleAILevel: Int = 0
     var gameOverDartAILevel:   Int = 0
 
-    // Camera switching during game-over exhibition
-    var gameOverFollowedShip: Ship?       // nil until game-over starts
+    var gameOverFollowedShip: Ship?
     var gameOverLastSwitchTime: TimeInterval = 0
-    var gameOverAnimationStartTime: TimeInterval = 0  // when AI/shooting begins (5s after game ends)
+    var gameOverAnimationStartTime: TimeInterval = 0
 
     var gameOverLabelNode: SKNode?
-
-    var needleVisibleSince: TimeInterval = 0
-    var dartVisibleSince: TimeInterval = 0
-
-    // FIX #8 — respawn delay: don't reappear until bullets fired before death have expired
-    var needleDestroyTime: TimeInterval = 0
-    var dartDestroyTime: TimeInterval = 0
-    var needleRespawnScheduled: Bool = false
-    var dartRespawnScheduled: Bool = false
-
-    // Expert AI post-kill braking: record when each ship last scored a kill
-    var needleKillTime: TimeInterval = 0
-    var dartKillTime: TimeInterval = 0
-
-    // FIX #5 — bullet limit choices: 10 / 50 / ∞  (3 positions, 2 steps)
-    var needleBulletLimitSelection: Int = 1   // default = 50
-    var dartBulletLimitSelection: Int = 1
-    let bulletSliderSteps: Int = 2
-    var needleBulletsRemaining: Int = 0
-    var dartBulletsRemaining: Int = 0
-    var needleBulletCounterNode: SKNode?
-    var dartBulletCounterNode: SKNode?
 
     var sunEnabled: Bool = true
     var sunNode: SKShapeNode?
@@ -181,23 +117,18 @@ final class GameScene: SKScene {
     var aiToggleButton: SKShapeNode?
     var wedgeAIToggleButton: SKShapeNode?
 
-    // Gravity slider: 10 steps, value = step × 4.0  →  0, 4, 8 … 40
-    // Step 5 = 20.0 (2.5x the original default)
     var gravitySliderSelection: Int = 5
     let gravitySliderSteps:     Int = 10
     var gravitySliderTrack: SKShapeNode?
     var gravitySliderKnob:  SKShapeNode?
     var gravityValueLabel:  SKLabelNode?
 
-    // Bullet-life slider: 10 steps, value = 1.5 + step × 0.75  →  1.5 … 9.0 s
-    // Step 2 = 3.0 s (original "short" default)
     var bulletLifeSliderSelection: Int = 2
     let bulletLifeSliderSteps:     Int = 10
     var bulletLifeSliderTrack: SKShapeNode?
     var bulletLifeSliderKnob:  SKShapeNode?
     var bulletLifeValueLabel:  SKLabelNode?
 
-    // Computed values used throughout physics and AI
     var gravityMultiplier: CGFloat { CGFloat(gravitySliderSelection) * 4.0 }
     var bulletLifeSeconds: CGFloat { 1.5 + CGFloat(bulletLifeSliderSelection) * 0.75 }
 
@@ -352,20 +283,20 @@ final class GameScene: SKScene {
         if lastLaidOutSize == s { return }
         lastLaidOutSize = s
 
+        // Guard against layout being called before sceneDidLoad completes
+        guard needle != nil, dart != nil else { return }
+
         let vw = virtualWorldWidth, vh = virtualWorldHeight
         let newNeedleSpawn = CGPoint(x: vw * 0.20, y: vh * 0.5)
         let newDartSpawn   = CGPoint(x: vw * 0.80, y: vh * 0.5)
 
-        if needle != nil {
-            let wasAtOrigin = needle.spawnPosition == .zero || needle.node.position == .zero
-            needle.spawnPosition = newNeedleSpawn
-            if wasAtOrigin && !needle.node.isHidden { needle.node.position = newNeedleSpawn }
-        }
-        if dart != nil {
-            let wasAtOrigin = dart.spawnPosition == .zero || dart.node.position == .zero
-            dart.spawnPosition = newDartSpawn
-            if wasAtOrigin && !dart.node.isHidden { dart.node.position = newDartSpawn }
-        }
+        let wasAtOrigin = needle.spawnPosition == .zero || needle.node.position == .zero
+        needle.spawnPosition = newNeedleSpawn
+        if wasAtOrigin && !needle.node.isHidden { needle.node.position = newNeedleSpawn }
+        
+        let dartWasAtOrigin = dart.spawnPosition == .zero || dart.node.position == .zero
+        dart.spawnPosition = newDartSpawn
+        if dartWasAtOrigin && !dart.node.isHidden { dart.node.position = newDartSpawn }
 
         let buttonRadius: CGFloat = 40
         // FIX #1 — respect bottom safe area for on-screen buttons
@@ -404,8 +335,8 @@ final class GameScene: SKScene {
 
         // FIX #1 — respect top safe area for HUD
         let topY = s.height - 30 - safeAreaTopInset
-        needleScoreNode?.position = CGPoint(x: 24, y: topY)
-        dartScoreNode?.position = CGPoint(x: s.width - 24, y: topY)
+        needle.scoreNode?.position = CGPoint(x: 24, y: topY)
+        dart.scoreNode?.position = CGPoint(x: s.width - 24, y: topY)
         optionsButton?.position = CGPoint(x: s.width / 2, y: topY)
         optionsOverlay?.position = CGPoint(x: s.width / 2, y: s.height / 2)
 
@@ -418,7 +349,6 @@ final class GameScene: SKScene {
         self.lastUpdateTime = 0
         self.backgroundColor = .black
 
-        // Camera – always present.  In non-virtual mode it sits at the screen centre and never moves.
         cameraCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         cameraNode.zPosition = 1000
         addChild(cameraNode)
@@ -428,18 +358,22 @@ final class GameScene: SKScene {
         let needleSpawn = CGPoint(x: size.width * 0.20, y: size.height * 0.5)
         let dartSpawn   = CGPoint(x: size.width * 0.80, y: size.height * 0.5)
 
-        needle = Ship(profile: .needle, flame: createFlameNode(), spawn: needleSpawn)
-        dart   = Ship(profile: .dart,   flame: createFlameNode(), spawn: dartSpawn)
+        needle = Ship(profile: .needle, flame: ShipProfile.needle.createFlameNode(), spawn: needleSpawn)
+        dart   = Ship(profile: .dart,   flame: ShipProfile.dart.createFlameNode(), spawn: dartSpawn)
         
-        // Populate ships array for generalized collision detection
         ships = [needle, dart]
+        
+        let nowVisible = CACurrentMediaTime()
+        let needleState = state(for: needle)
+        needleState.visibleSince = nowVisible
+        needleState.bulletLimitSelection = 1
+        
+        let dartState = state(for: dart)
+        dartState.visibleSince = nowVisible
+        dartState.bulletLimitSelection = 1
 
         addChild(needle.node)
         addChild(dart.node)
-
-        let nowVisible = CACurrentMediaTime()
-        needleVisibleSince = nowVisible
-        dartVisibleSince = nowVisible
 
         // Firing direction lines
         let needleMuzzleY = needle.profile.muzzleY
@@ -535,12 +469,14 @@ final class GameScene: SKScene {
         addChild(dartTargetIndicator)
 
         // Scores
-        needleScoreNode = SKNode()
-        dartScoreNode = SKNode()
+        let needleScoreNode = SKNode()
+        let dartScoreNode = SKNode()
         needleScoreNode.position = CGPoint(x: 24, y: size.height - 30)
         dartScoreNode.position = CGPoint(x: size.width - 24, y: size.height - 30)
         addChild(needleScoreNode)
         addChild(dartScoreNode)
+        needle.scoreNode = needleScoreNode
+        dart.scoreNode = dartScoreNode
         updateScoreDisplays()
 
         // Options button
@@ -713,60 +649,101 @@ final class GameScene: SKScene {
         optionsDimmer?.isHidden = !show
     }
 
-    // MARK: - Ship Shapes
-
-    private func createFlameNode() -> SKShapeNode {
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: -18))
-        path.addLine(to: CGPoint(x: -7, y: -30))
-        path.addLine(to: CGPoint(x: 7, y: -30))
-        path.closeSubpath()
-        let flame = SKShapeNode(path: path)
-        flame.fillColor = .orange
-        flame.strokeColor = .yellow
-        flame.lineWidth = 1.5
-        flame.glowWidth = 3
-        flame.zPosition = 3
-        return flame
-    }
-
 
 
     // MARK: - Generalized Ship Management
     
-    private func incrementScore(for ship: Ship) {
+    /// Gets or creates the state object for a ship.
+    /// Internal (not private) so it's accessible from GameScene+AI extension.
+    func state(for ship: Ship) -> ShipState {
         let key = ObjectIdentifier(ship.node)
-        shipScores[key, default: 0] += 1
-        
-        // Also update legacy score variables for backward compatibility
-        if ship === needle {
-            needleScore = shipScores[key]!
-        } else if ship === dart {
-            dartScore = shipScores[key]!
+        if let existing = shipStates[key] {
+            return existing
         }
+        let newState = ShipState()
+        shipStates[key] = newState
+        return newState
+    }
+    
+    /// Legacy accessor for needle state (backward compatibility)
+    var needleState: ShipState { state(for: needle) }
+    
+    /// Legacy accessor for dart state (backward compatibility)
+    var dartState: ShipState { state(for: dart) }
+    
+    // Legacy accessors for needle AI
+    var needleAIEnabled: Bool {
+        get { needleState.aiEnabled }
+        set { needleState.aiEnabled = newValue }
+    }
+    
+    var needleAIIntelligence: Int {
+        get { needleState.aiIntelligence }
+        set { needleState.aiIntelligence = newValue }
+    }
+    
+    // Legacy accessors for dart/wedge AI
+    var wedgeAIEnabled: Bool {
+        get { dartState.aiEnabled }
+        set { dartState.aiEnabled = newValue }
+    }
+    
+    var wedgeAIIntelligence: Int {
+        get { dartState.aiIntelligence }
+        set { dartState.aiIntelligence = newValue }
+    }
+    
+    // Bullet limit accessors
+    var needleBulletLimitSelection: Int {
+        get { needleState.bulletLimitSelection }
+        set { needleState.bulletLimitSelection = newValue }
+    }
+    
+    var dartBulletLimitSelection: Int {
+        get { dartState.bulletLimitSelection }
+        set { dartState.bulletLimitSelection = newValue }
+    }
+    
+    let bulletSliderSteps: Int = 2
+    
+    var needleBulletsRemaining: Int {
+        get { needleState.bulletsRemaining }
+        set { needleState.bulletsRemaining = newValue }
+    }
+    
+    var dartBulletsRemaining: Int {
+        get { dartState.bulletsRemaining }
+        set { dartState.bulletsRemaining = newValue }
+    }
+    
+    var needleBulletCounterNode: SKNode? {
+        get { needleState.bulletCounterNode }
+        set { needleState.bulletCounterNode = newValue }
+    }
+    
+    var dartBulletCounterNode: SKNode? {
+        get { dartState.bulletCounterNode }
+        set { dartState.bulletCounterNode = newValue }
+    }
+    
+    private func incrementScore(for ship: Ship) {
+        ship.score += 1
         updateScoreDisplays()
     }
     
     private func recordKillTime(for ship: Ship, at time: TimeInterval) {
         let key = ObjectIdentifier(ship.node)
         shipKillTimes[key] = time
-        
-        // Also update legacy kill time variables for backward compatibility
-        if ship === needle {
-            needleKillTime = time
-        } else if ship === dart {
-            dartKillTime = time
-        }
     }
     
-    private func getKillTime(for ship: Ship) -> TimeInterval {
+    func getKillTime(for ship: Ship) -> TimeInterval {
         let key = ObjectIdentifier(ship.node)
         return shipKillTimes[key] ?? 0
     }
 
     // MARK: - Missiles
 
-    private func fireMissile(from ship: Ship, muzzleOffset: CGPoint) {
+    func fireMissile(from ship: Ship, muzzleOffset: CGPoint) {
         if ship.node.isHidden { return }
 
         if ship === needle {
@@ -816,30 +793,22 @@ final class GameScene: SKScene {
         enableRandomRespawn = true
         let originalVelocity = ship.velocity
 
-        // FIX #8 — record destroy time so we can delay respawn until bullets expire
         let now = CACurrentMediaTime()
-        if ship === needle { needleDestroyTime = now }
-        else               { dartDestroyTime   = now }
+        let st = state(for: ship)
+        st.destroyTime = now
 
-        let respawnPos = (enableRandomRespawn ? safeRandomPosition(avoiding: ship) : nil)
-                         ?? ship.spawnPosition
+        let respawnPos = (enableRandomRespawn ? safeRandomPosition(avoiding: ship) : nil) ?? ship.spawnPosition
         let panDelay: TimeInterval = virtualScreenMode != .off ? 2.0 : 1.0
-        if ship === needle {
-            needleRespawnTarget    = respawnPos
-            cameraPanToNeedleAfter = now + panDelay
-        } else {
-            dartRespawnTarget      = respawnPos
-            cameraPanToDartAfter   = now + panDelay
-        }
+        
+        st.respawnTarget = respawnPos
+        st.cameraPanAfter = now + panDelay
 
         ship.hide()
 
-        // In game-over mode each respawn gets a fresh random AI level (0=basic, 1=predictive, 2=expert)
         if gameOver {
             if ship === needle { gameOverNeedleAILevel = Int.random(in: 0...2) }
             else               { gameOverDartAILevel   = Int.random(in: 0...2) }
 
-            // Switch camera to the surviving ship, unless both exploded within 2 seconds
             let survivor = (ship === needle) ? dart : needle
             if now - gameOverLastSwitchTime > 2.0 {
                 gameOverFollowedShip = survivor
@@ -847,7 +816,6 @@ final class GameScene: SKScene {
             }
         }
 
-        // Build wreck pieces from the ship's structure
         let pieces = ship.createDebrisPieces()
 
         let lifetime: CGFloat = 2.6
@@ -878,21 +846,44 @@ final class GameScene: SKScene {
     }
 
     private func startNewMatch() {
-        needleScore = 0; dartScore = 0
+        needle.score = 0
+        dart.score = 0
         updateScoreDisplays()
         enableRandomRespawn = false
         needle.reset(); dart.reset()
-        needleVisibleSince = CACurrentMediaTime()
-        dartVisibleSince = CACurrentMediaTime()
-        needleDestroyTime = 0; dartDestroyTime = 0
-        needleRespawnScheduled = false; dartRespawnScheduled = false
-        needleRespawnTarget = .zero; dartRespawnTarget = .zero
-        cameraPanToNeedleAfter = 0; cameraPanToDartAfter = 0
-        needleKillTime = 0; dartKillTime = 0
+        
+        let now = CACurrentMediaTime()
+        needleState.visibleSince = now
+        dartState.visibleSince = now
+        needleState.destroyTime = 0
+        dartState.destroyTime = 0
+        needleState.respawnScheduled = false
+        dartState.respawnScheduled = false
+        needleState.respawnTarget = .zero
+        dartState.respawnTarget = .zero
+        needleState.cameraPanAfter = 0
+        dartState.cameraPanAfter = 0
+        
+        shipKillTimes.removeAll()
+        
         resetBulletCountsFromSelections()
-        aiNextThrustToggle = 0; aiNextFireTime = 0; aiThrustOn = false; aiCertainFireCooldown = 0
-        wedgeAINextThrustToggle = 0; wedgeAINextFireTime = 0; wedgeAIThrustOn = false; wedgeCertainFireCooldown = 0
-        dartSmoothedAcceleration = .zero; needleSmoothedAcceleration = .zero
+        
+        needleState.aiNextThrustToggle = 0
+        needleState.aiNextFireTime = 0
+        needleState.aiThrustOn = false
+        needleState.aiCertainFireCooldown = 0
+        needleState.smoothedAcceleration = .zero
+        needleState.previousVelocity = .zero
+        needleState.observedAcceleration = .zero
+        
+        dartState.aiNextThrustToggle = 0
+        dartState.aiNextFireTime = 0
+        dartState.aiThrustOn = false
+        dartState.aiCertainFireCooldown = 0
+        dartState.smoothedAcceleration = .zero
+        dartState.previousVelocity = .zero
+        dartState.observedAcceleration = .zero
+        
         enumerateChildNodes(withName: "missile") { n, _ in n.removeFromParent() }
         enumerateChildNodes(withName: "wreckPiece") { n, _ in n.removeFromParent() }
         gameOver = false
@@ -902,7 +893,6 @@ final class GameScene: SKScene {
         victorLabelNode?.removeFromParent(); victorLabelNode = nil
         gameOverLabelNode?.removeFromParent(); gameOverLabelNode = nil
         
-        // restore the user's explicitly chosen screen size
         virtualScreenSelection = savedVirtualScreenSelection
         virtualScreenMode = virtualScreenSelection == 0 ? .off : .medium
         applyVirtualScreenMode()
@@ -916,19 +906,22 @@ final class GameScene: SKScene {
         }
         refreshOptionsUI()
         
-        // Start countdown timer
         startCountdown()
     }
 
     // MARK: - Score rendering
 
     private func updateScoreDisplays() {
-        needleScoreNode.removeAllChildren(); dartScoreNode.removeAllChildren()
-        let left = VectorTextRenderer.makeScoreNode(score: needleScore)
-        let right = VectorTextRenderer.makeScoreNode(score: dartScore)
+        needle.scoreNode?.removeAllChildren()
+        dart.scoreNode?.removeAllChildren()
+        
+        let left = VectorTextRenderer.makeScoreNode(score: needle.score)
+        let right = VectorTextRenderer.makeScoreNode(score: dart.score)
         left.position = .zero
         right.position = CGPoint(x: -right.calculateAccumulatedFrame().width, y: 0)
-        needleScoreNode.addChild(left); dartScoreNode.addChild(right)
+        
+        needle.scoreNode?.addChild(left)
+        dart.scoreNode?.addChild(right)
     }
     
     // MARK: - Countdown Timer
@@ -938,13 +931,11 @@ final class GameScene: SKScene {
         countdownStartTime = CACurrentMediaTime()
         lastDisplayedCountdownNumber = -1
 
-        // Ensure ships are visible and stationary at spawn points during countdown
         needle.node.isHidden = false
         needle.node.position = needle.spawnPosition
         needle.node.zRotation = 0
         needle.velocity = .zero
-        needle.flame.alpha = 0  // Ensure flame is off
-        // Restore head dot for needle
+        needle.flame.alpha = 0
         if needle.profile.headDotRadius > 0 {
             needle.node.childNode(withName: "needleHeadDot")?.alpha = 1
         }
@@ -953,13 +944,12 @@ final class GameScene: SKScene {
         dart.node.position = dart.spawnPosition
         dart.node.zRotation = 0
         dart.velocity = .zero
-        dart.flame.alpha = 0  // Ensure flame is off
+        dart.flame.alpha = 0
         
-        // Turn off all thruster states
         isThrustingNeedle = false
         isThrustingDart = false
-        aiThrustOn = false
-        wedgeAIThrustOn = false
+        needleState.aiThrustOn = false
+        dartState.aiThrustOn = false
 
         if countdownContainerNode == nil {
             let container = SKNode()
@@ -978,7 +968,6 @@ final class GameScene: SKScene {
         let remaining = 5 - Int(elapsed)
 
         if remaining > 0 {
-            // Keep the label above centre even if the camera has moved
             countdownContainerNode?.position = CGPoint(x: cameraCenter.x,
                                                        y: cameraCenter.y + size.height * 0.28)
 
@@ -994,12 +983,10 @@ final class GameScene: SKScene {
                 node.position = CGPoint(x: -w / 2, y: 0)
                 countdownContainerNode?.addChild(node)
 
-                // Brief scale-down pulse on each new digit
                 countdownContainerNode?.setScale(1.35)
                 countdownContainerNode?.run(.scale(to: 1.0, duration: 0.18))
             }
         } else {
-            // Countdown finished — tear down
             countdownActive = false
             countdownContainerNode?.removeFromParent()
             countdownContainerNode = nil
@@ -1080,14 +1067,6 @@ final class GameScene: SKScene {
         let now = CACurrentMediaTime()
         gameOverAnimationStartTime = now + 5.0
 
-        driftNeedleThrustOn = true; driftDartThrustOn = true
-        driftNeedleNextToggle = now + Double.random(in: 0.4...1.0)
-        driftDartNextToggle   = now + Double.random(in: 0.4...1.0)
-        driftNeedleTargetAngle = CGFloat.random(in: 0...(2 * .pi))
-        driftDartTargetAngle   = CGFloat.random(in: 0...(2 * .pi))
-        driftNeedleNextTurn = now + Double.random(in: 0.8...2.0)
-        driftDartNextTurn   = now + Double.random(in: 0.8...2.0)
-
         showVictorLabel(); showGameOverLabel()
         fireThrustButton?.isHidden  = true
         rightThrustButton?.isHidden = true
@@ -1106,10 +1085,8 @@ final class GameScene: SKScene {
         let dartCX   =  sw/2 - 24
         let container = SKNode(); container.zPosition = 80
         cameraNode.addChild(container); victorLabelNode = container
-        // Use the same dim, no-glow vector style as GAME OVER — bright:false keeps strokes
-        // thin and unlit, which is what makes the vector font look authentically retro.
         let scale: CGFloat = 1.2; let spacing: CGFloat = 5
-        if needleScore == dartScore {
+        if needle.score == dart.score {
             for (text, cx) in [("TIE", needleCX), ("TIE", dartCX)] {
                 let w = VectorTextRenderer.vectorWordWidth(text, scale: scale, spacing: spacing)
                 let node = VectorTextRenderer.makeVectorWordNode(text, scale: scale, spacing: spacing)
@@ -1119,7 +1096,7 @@ final class GameScene: SKScene {
             let w = VectorTextRenderer.vectorWordWidth("WINNER", scale: scale, spacing: spacing)
             let word = VectorTextRenderer.makeVectorWordNode("WINNER", scale: scale, spacing: spacing)
             let edgeInset: CGFloat = 12
-            let startX: CGFloat = needleScore > dartScore
+            let startX: CGFloat = needle.score > dart.score
                 ? -sw/2 + edgeInset
                 : sw/2 - edgeInset - w
             word.position = CGPoint(x: startX, y: labelY); container.addChild(word)
@@ -1289,8 +1266,9 @@ final class GameScene: SKScene {
         if !followed.node.isHidden {
             target = followed.node.position
         } else {
-            let respawnPt  = (followed === needle) ? needleRespawnTarget : dartRespawnTarget
-            let panAfter   = (followed === needle) ? cameraPanToNeedleAfter : cameraPanToDartAfter
+            let st = state(for: followed)
+            let respawnPt = st.respawnTarget
+            let panAfter = st.cameraPanAfter
             target = (currentTime >= panAfter && panAfter > 0) ? respawnPt : cameraCenter
         }
 
@@ -1311,10 +1289,10 @@ final class GameScene: SKScene {
         let br: CGFloat = 40
         let padding: CGFloat = 12
 
-        needleScoreNode?.position  = CGPoint(x: cx - sw/2 + 24, y: topY)
-        dartScoreNode?.position    = CGPoint(x: cx + sw/2 - 24, y: topY)
-        optionsButton?.position    = CGPoint(x: cx, y: topY)
-        optionsOverlay?.position   = CGPoint(x: cx, y: cy)
+        needle.scoreNode?.position = CGPoint(x: cx - sw/2 + 24, y: topY)
+        dart.scoreNode?.position = CGPoint(x: cx + sw/2 - 24, y: topY)
+        optionsButton?.position = CGPoint(x: cx, y: topY)
+        optionsOverlay?.position = CGPoint(x: cx, y: cy)
 
         let fireX = cx + sw/2 - br - 20
         let fireY = bottomY + br + 20
@@ -1477,28 +1455,28 @@ final class GameScene: SKScene {
     }
 
     private func respawnShip(_ ship: Ship) {
-        let precomputed = (ship === needle) ? needleRespawnTarget : dartRespawnTarget
+        let st = state(for: ship)
         let pos: CGPoint
-        if precomputed != .zero { pos = precomputed }
-        else if enableRandomRespawn, let p = safeRandomPosition(avoiding: ship) { pos = p }
-        else { pos = ship.spawnPosition }
+        if st.respawnTarget != .zero { 
+            pos = st.respawnTarget 
+        } else if enableRandomRespawn, let p = safeRandomPosition(avoiding: ship) { 
+            pos = p 
+        } else { 
+            pos = ship.spawnPosition 
+        }
         
-        // Final safety check: don't spawn on top of opponent
         let otherShip: Ship = (ship === needle) ? dart! : needle!
         if !otherShip.node.isHidden {
             let dx = pos.x - otherShip.node.position.x
             let dy = pos.y - otherShip.node.position.y
-            let minSafeDist: CGFloat = 300  // larger than safeRandomPosition check for extra safety
+            let minSafeDist: CGFloat = 300
             if dx*dx + dy*dy < minSafeDist*minSafeDist {
-                // Too close! Delay respawn and try again later
-                if ship === needle {
-                    needleRespawnScheduled = true
-                    needleDestroyTime = CACurrentMediaTime()  // Reset timer to retry soon
-                } else {
-                    dartRespawnScheduled = true
-                    dartDestroyTime = CACurrentMediaTime()
-                }
-                return  // Don't respawn this frame
+                let st = state(for: ship)
+                let now = CACurrentMediaTime()
+                
+                st.respawnScheduled = true
+                st.destroyTime = now
+                return
             }
         }
         
@@ -1516,7 +1494,6 @@ final class GameScene: SKScene {
 
         updateCamera(currentTime: currentTime, dt: dt)
         
-        // Update countdown if active
         if countdownActive {
             updateCountdown(currentTime: currentTime)
             needleTargetIndicator.alpha = 0
@@ -1534,108 +1511,51 @@ final class GameScene: SKScene {
 
         for entity in entities { entity.update(deltaTime: dt) }
 
-        // FIX #8 — check for deferred respawns
         let respawnBulletLife = bulletLifeSeconds
-        if needleRespawnScheduled && needle.node.isHidden {
-            if currentTime - needleDestroyTime >= respawnBulletLife {
-                needleRespawnScheduled = false
-                respawnShip(needle)
-                needleVisibleSince = currentTime
-            }
-        }
-        if dartRespawnScheduled && dart.node.isHidden {
-            if currentTime - dartDestroyTime >= respawnBulletLife {
-                dartRespawnScheduled = false
-                respawnShip(dart)
-                dartVisibleSince = currentTime
+        for ship in ships {
+            let st = state(for: ship)
+            if st.respawnScheduled && ship.node.isHidden {
+                if currentTime - st.destroyTime >= respawnBulletLife {
+                    st.respawnScheduled = false
+                    respawnShip(ship)
+                    st.visibleSince = currentTime
+                }
             }
         }
 
         if !gameOver || currentTime >= gameOverAnimationStartTime {
 
         if gameOver && virtualScreenMode != .medium {
-            // Switch to 3000×3000 now that the 5-second grace period is up
             virtualScreenSelection = 1
             virtualScreenMode = .medium
             applyVirtualScreenMode()
         }
 
         if gameOver {
-            // In game-over mode, override AI settings from the randomly-assigned levels
-            // so ships use the real AI path below rather than the old random drift steering.
             needleAIEnabled       = true
             needleAIIntelligence  = gameOverNeedleAILevel
             wedgeAIEnabled        = true
             wedgeAIIntelligence   = gameOverDartAILevel
-            // Restore infinite ammo each frame in case it was changed by respawn logic
             if needleBulletsRemaining < Int.max / 2 { needleBulletsRemaining = Int.max }
             if dartBulletsRemaining   < Int.max / 2 { dartBulletsRemaining   = Int.max }
         }
 
         do {
-            // Normal play (and game-over exhibition — same AI path, different settings)
-            
-            // MARK: Rotation
             if !needle.node.isHidden {
                 if needleAIEnabled {
-                    let huntingUnarmed = needleAIIntelligence >= 2
-                        && !dart.node.isHidden && dartBulletsRemaining == 0
-                    var isEvading = false
-                    var isBraking = false
-                    
-                    let aimTarget = sunNode != nil
-                        ? computeAimWithSun(ship: needle, opponent: dart,
-                                           intelligence: needleAIIntelligence,
-                                           huntingUnarmed: huntingUnarmed,
-                                           isEvading: &isEvading,
-                                           isBraking: &isBraking,
-                                           currentTime: currentTime,
-                                           lastKillTime: dartKillTime,
-                                           opponentBulletsRemaining: dartBulletsRemaining)
-                        : computeAimWithoutSun(ship: needle, opponent: dart,
-                                              intelligence: needleAIIntelligence,
-                                              huntingUnarmed: huntingUnarmed,
-                                              isEvading: &isEvading,
-                                              isBraking: &isBraking,
-                                              currentTime: currentTime,
-                                              lastKillTime: dartKillTime,
-                                              opponentBulletsRemaining: dartBulletsRemaining)
-                    
-                    rotateShip(needle, toward: aimTarget, dt: dt)
-                    
-                    // Thrust
-                    isThrustingNeedle = computeThrust(ship: needle, opponent: dart,
-                                                      intelligence: needleAIIntelligence,
-                                                      huntingUnarmed: huntingUnarmed,
-                                                      isBraking: isBraking,
-                                                      isEvading: isEvading,
-                                                      thrustState: &aiThrustOn,
-                                                      nextThrustToggle: &aiNextThrustToggle,
-                                                      currentTime: currentTime)
-                    
-                    // Fire
-                    if computeFire(ship: needle, opponent: dart,
-                                  intelligence: needleAIIntelligence,
-                                  isBraking: isBraking,
-                                  isEvading: isEvading,
-                                  opponentBulletsRemaining: dartBulletsRemaining,
-                                  nextFireTime: &aiNextFireTime,
-                                  certainFireCooldown: &aiCertainFireCooldown,
-                                  visibleSince: dartVisibleSince,
-                                  currentTime: currentTime) {
-                        fireMissile(from: needle, muzzleOffset: needle.muzzleOffset())
-                    }
-                    
+                    isThrustingNeedle = updateShipAI(
+                        ship: needle,
+                        opponent: dart,
+                        currentTime: currentTime,
+                        dt: dt)
                 } else if let p = aimPoint {
                     rotateShip(needle, toward: p, dt: dt)
                 }
             }
             
-            // MARK: Wedge/Dart rotation / AI
             if !dart.node.isHidden {
                 if wedgeAIEnabled {
                     if wedgeAIIntelligence == 3 {
-                        // Neural AI path (keep existing code)
                         var enemyBullets: [(pos: CGPoint, vel: CGVector)] = []
                         enumerateChildNodes(withName: "missile") { node, _ in
                             guard let owner = self.missileOwner.object(forKey: node),
@@ -1668,74 +1588,21 @@ final class GameScene: SKScene {
                             dart.node.zRotation += CGFloat(action.rotate) * dart.profile.turnSpeed * CGFloat(dt)
                         }
                         isThrustingDart = action.thrust
-                        if action.fire && currentTime >= wedgeAINextFireTime {
+                        if action.fire && currentTime >= dartState.aiNextFireTime {
                             fireMissile(from: dart, muzzleOffset: dart.muzzleOffset())
-                            wedgeAINextFireTime = currentTime + 0.1
+                            dartState.aiNextFireTime = currentTime + 0.1
                         }
                     } else {
-                        // Standard AI (levels 0-2)
-                        let huntingUnarmed = wedgeAIIntelligence >= 2
-                            && !needle.node.isHidden && needleBulletsRemaining == 0
-                        var isEvading = false
-                        var isBraking = false
-                        
-                        let aimTarget = sunNode != nil
-                            ? computeAimWithSun(ship: dart, opponent: needle,
-                                               intelligence: wedgeAIIntelligence,
-                                               huntingUnarmed: huntingUnarmed,
-                                               isEvading: &isEvading,
-                                               isBraking: &isBraking,
-                                               currentTime: currentTime,
-                                               lastKillTime: needleKillTime,
-                                               opponentBulletsRemaining: needleBulletsRemaining)
-                            : computeAimWithoutSun(ship: dart, opponent: needle,
-                                                  intelligence: wedgeAIIntelligence,
-                                                  huntingUnarmed: huntingUnarmed,
-                                                  isEvading: &isEvading,
-                                                  isBraking: &isBraking,
-                                                  currentTime: currentTime,
-                                                  lastKillTime: needleKillTime,
-                                                  opponentBulletsRemaining: needleBulletsRemaining)
-                        
-                        rotateShip(dart, toward: aimTarget, dt: dt)
-                        
-                        // Thrust
-                        isThrustingDart = computeThrust(ship: dart, opponent: needle,
-                                                       intelligence: wedgeAIIntelligence,
-                                                       huntingUnarmed: huntingUnarmed,
-                                                       isBraking: isBraking,
-                                                       isEvading: isEvading,
-                                                       thrustState: &wedgeAIThrustOn,
-                                                       nextThrustToggle: &wedgeAINextThrustToggle,
-                                                       currentTime: currentTime)
-                        
-                        // Fire
-                        if computeFire(ship: dart, opponent: needle,
-                                      intelligence: wedgeAIIntelligence,
-                                      isBraking: isBraking,
-                                      isEvading: isEvading,
-                                      opponentBulletsRemaining: needleBulletsRemaining,
-                                      nextFireTime: &wedgeAINextFireTime,
-                                      certainFireCooldown: &wedgeCertainFireCooldown,
-                                      visibleSince: needleVisibleSince,
-                                      currentTime: currentTime) {
-                            fireMissile(from: dart, muzzleOffset: dart.muzzleOffset())
-                        }
+                        isThrustingDart = updateShipAI(
+                            ship: dart,
+                            opponent: needle,
+                            currentTime: currentTime,
+                            dt: dt)
                     }
                 } else if let p = aimPoint {
                     rotateShip(dart, toward: p, dt: dt)
                 }
             }
-            
-            // Target indicators — commented out; uncomment to re-enable aim visualisation
-            // if let t = needleAimTarget {
-            //     needleTargetIndicator.position = t; needleTargetIndicator.alpha = 0.7
-            // } else { needleTargetIndicator.alpha = 0 }
-            //
-            // if let t = dartAimTarget {
-            //     dartTargetIndicator.position = t; dartTargetIndicator.alpha = 0.7
-            // } else { dartTargetIndicator.alpha = 0 }
-
 
             if isThrustingDart {
                 dart.applyThrust(dt: CGFloat(dt)); dart.flame.alpha = 1
@@ -1745,11 +1612,10 @@ final class GameScene: SKScene {
                 needle.applyThrust(dt: CGFloat(dt)); needle.flame.alpha = 1
             } else { needle.flame.alpha = 0 }
 
-        } // end do (normal play + game-over exhibition)
+        }
 
-        } // end delay guard (!gameOver || past animation start)
+        }
 
-        // Gravity - sun exists when gravity slider > 0
         if let sun = sunNode {
             func applyGravity(to ship: Ship) {
                 let dx = sun.position.x - ship.node.position.x
@@ -1779,26 +1645,22 @@ final class GameScene: SKScene {
             }
         }
 
-        dart.clampSpeed();   needle.clampSpeed()
+        dart.clampSpeed(); needle.clampSpeed()
         dart.integrate(dt: CGFloat(dt)); needle.integrate(dt: CGFloat(dt))
 
         if dt > 0 {
-            dartObservedAcceleration = CGVector(
-                dx: (dart.velocity.dx - dartPreviousVelocity.dx) / CGFloat(dt),
-                dy: (dart.velocity.dy - dartPreviousVelocity.dy) / CGFloat(dt))
-            needleObservedAcceleration = CGVector(
-                dx: (needle.velocity.dx - needlePreviousVelocity.dx) / CGFloat(dt),
-                dy: (needle.velocity.dy - needlePreviousVelocity.dy) / CGFloat(dt))
-            let α: CGFloat = 0.08
-            dartSmoothedAcceleration = CGVector(
-                dx: dartSmoothedAcceleration.dx + α * (dartObservedAcceleration.dx - dartSmoothedAcceleration.dx),
-                dy: dartSmoothedAcceleration.dy + α * (dartObservedAcceleration.dy - dartSmoothedAcceleration.dy))
-            needleSmoothedAcceleration = CGVector(
-                dx: needleSmoothedAcceleration.dx + α * (needleObservedAcceleration.dx - needleSmoothedAcceleration.dx),
-                dy: needleSmoothedAcceleration.dy + α * (needleObservedAcceleration.dy - needleSmoothedAcceleration.dy))
+            for ship in ships {
+                let st = state(for: ship)
+                st.observedAcceleration = CGVector(
+                    dx: (ship.velocity.dx - st.previousVelocity.dx) / CGFloat(dt),
+                    dy: (ship.velocity.dy - st.previousVelocity.dy) / CGFloat(dt))
+                let α: CGFloat = 0.08
+                st.smoothedAcceleration = CGVector(
+                    dx: st.smoothedAcceleration.dx + α * (st.observedAcceleration.dx - st.smoothedAcceleration.dx),
+                    dy: st.smoothedAcceleration.dy + α * (st.observedAcceleration.dy - st.smoothedAcceleration.dy))
+                st.previousVelocity = ship.velocity
+            }
         }
-        dartPreviousVelocity   = dart.velocity
-        needlePreviousVelocity = needle.velocity
 
         func handleEdges(_ ship: Ship) {
             var pos = ship.node.position
@@ -1865,7 +1727,8 @@ final class GameScene: SKScene {
                 if node.position.y < 0   { node.position.y = wH }
                 if node.position.y > wH  { node.position.y = 0 }
             }
-            life -= CGFloat(dt); node.userData?["life"] = life
+            life -= CGFloat(dt)
+            node.userData?["life"] = life
             node.alpha = max(0.0, life / maxLife)
             if life <= 0 {
                 if let owner = self.wreckOwner.object(forKey: node) {
@@ -1875,25 +1738,19 @@ final class GameScene: SKScene {
                     if newCount == 0 {
                         self.enableRandomRespawn = true
                         let bulletLife = self.bulletLifeSeconds
-                        let destroyTime = (owner === self.needle.node)
-                            ? self.needleDestroyTime : self.dartDestroyTime
+                        
+                        let ship = (owner === self.needle.node) ? self.needle : self.dart
+                        let st = self.state(for: ship!)
+                        
+                        let destroyTime = st.destroyTime
                         let elapsed = currentTime - destroyTime
                         let readyToRespawn = elapsed >= bulletLife
 
-                        if owner === self.needle.node {
-                            if readyToRespawn {
-                                self.respawnShip(self.needle)
-                                self.needleVisibleSince = currentTime
-                            } else {
-                                self.needleRespawnScheduled = true
-                            }
-                        } else if owner === self.dart.node {
-                            if readyToRespawn {
-                                self.respawnShip(self.dart)
-                                self.dartVisibleSince = currentTime
-                            } else {
-                                self.dartRespawnScheduled = true
-                            }
+                        if readyToRespawn {
+                            self.respawnShip(ship!)
+                            st.visibleSince = currentTime
+                        } else {
+                            st.respawnScheduled = true
                         }
                     }
                 }
@@ -1913,7 +1770,7 @@ final class GameScene: SKScene {
                 let dx = needle.node.position.x - sun.position.x
                 let dy = needle.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    if !gameOver { dartScore += 1; updateScoreDisplays() }
+                    if !gameOver { dart.score += 1; updateScoreDisplays() }
                     explodeShip(ship: needle)
                 }
             }
@@ -1921,7 +1778,7 @@ final class GameScene: SKScene {
                 let dx = dart.node.position.x - sun.position.x
                 let dy = dart.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    if !gameOver { needleScore += 1; updateScoreDisplays() }
+                    if !gameOver { needle.score += 1; updateScoreDisplays() }
                     explodeShip(ship: dart)
                 }
             }
@@ -2041,11 +1898,17 @@ final class GameScene: SKScene {
                 if !handled && currentOptionsTab == .ships {
                     if let btn = aiToggleButton, btn.contains(locInOverlay) {
                         needleAIEnabled.toggle()
-                        aiNextThrustToggle = 0; aiNextFireTime = 0; aiThrustOn = false
+                        needleState.aiNextThrustToggle = 0
+                        needleState.aiNextFireTime = 0
+                        needleState.aiThrustOn = false
+                        needleState.aiCertainFireCooldown = 0
                         updateNeedleControlsVisibility(); refreshOptionsUI(); handled = true
                     } else if let btn = wedgeAIToggleButton, btn.contains(locInOverlay) {
                         wedgeAIEnabled.toggle()
-                        wedgeAINextThrustToggle = 0; wedgeAINextFireTime = 0; wedgeAIThrustOn = false
+                        dartState.aiNextThrustToggle = 0
+                        dartState.aiNextFireTime = 0
+                        dartState.aiThrustOn = false
+                        dartState.aiCertainFireCooldown = 0
                         updateWedgeControlsVisibility(); refreshOptionsUI(); handled = true
                     }
                 }
@@ -2182,12 +2045,22 @@ override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
                 }
                 if draggingNeedleAISliderTouch == touch {
                     let idx = aiSliderIndexForOverlayX(locInOverlay.x)
-                    if needleAIIntelligence != idx { needleAIIntelligence = idx; refreshOptionsUI() }
+                    if needleAIIntelligence != idx { 
+                        needleAIIntelligence = idx
+                        // Sync ShipState
+                        needleState.aiIntelligence = needleAIIntelligence
+                        refreshOptionsUI() 
+                    }
                     continue
                 }
                 if draggingWedgeAISliderTouch == touch {
                     let idx = aiSliderIndexForOverlayX(locInOverlay.x)
-                    if wedgeAIIntelligence != idx { wedgeAIIntelligence = idx; refreshOptionsUI() }
+                    if wedgeAIIntelligence != idx { 
+                        wedgeAIIntelligence = idx
+                        // Sync ShipState
+                        dartState.aiIntelligence = wedgeAIIntelligence
+                        refreshOptionsUI() 
+                    }
                     continue
                 }
                 if draggingVirtualScreenSliderTouch == touch {

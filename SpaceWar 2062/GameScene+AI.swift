@@ -21,7 +21,7 @@ extension GameScene {
         let bulletSpeed = shooter.profile.bulletSpeed
         let targetPos = target.node.position
         let targetVel = target.velocity
-        let acc = (target === dart) ? dartSmoothedAcceleration : needleSmoothedAcceleration
+        let acc = state(for: target).smoothedAcceleration
 
         var t = hypot(targetPos.x - origin.x, targetPos.y - origin.y) / bulletSpeed
         for _ in 0..<10 {
@@ -45,7 +45,7 @@ extension GameScene {
             targetPos = nearestVirtualPosition(of: targetPos, from: origin)
         }
         let targetVel = target.velocity
-        let acc = (target === dart) ? dartSmoothedAcceleration : needleSmoothedAcceleration
+        let acc = state(for: target).smoothedAcceleration
         var t = hypot(targetPos.x - origin.x, targetPos.y - origin.y) / bulletSpeed
         for _ in 0..<15 {
             let px = targetPos.x + targetVel.dx * t + 0.5 * acc.dx * t * t
@@ -720,5 +720,92 @@ extension GameScene {
         }
         
         return shouldFire
+    }
+    
+    // MARK: - High-Level AI Update (Artisanal AI)
+    
+    /// Updates a ship's AI for rotation, thrust, and firing.
+    /// This is the "artisanal" AI logic that should be called from the update loop
+    /// instead of having it inline in GameScene.update().
+    ///
+    /// - Parameters:
+    ///   - ship: The ship to update
+    ///   - opponent: The opponent ship
+    ///   - currentTime: Current game time
+    ///   - dt: Delta time
+    /// - Returns: true if the ship should be thrusting
+    func updateShipAI(
+        ship: Ship,
+        opponent: Ship,
+        currentTime: TimeInterval,
+        dt: TimeInterval
+    ) -> Bool {
+        let st = state(for: ship)
+        let opponentState = state(for: opponent)
+        
+        guard st.aiEnabled, !ship.node.isHidden, !opponent.node.isHidden else {
+            return false
+        }
+        
+        // Check if hunting unarmed opponent
+        let huntingUnarmed = st.aiIntelligence >= 2 && opponentState.bulletsRemaining == 0
+        
+        var isEvading = false
+        var isBraking = false
+        
+        // Compute aim target
+        let aimTarget = sunNode != nil
+            ? computeAimWithSun(
+                ship: ship,
+                opponent: opponent,
+                intelligence: st.aiIntelligence,
+                huntingUnarmed: huntingUnarmed,
+                isEvading: &isEvading,
+                isBraking: &isBraking,
+                currentTime: currentTime,
+                lastKillTime: getKillTime(for: opponent),
+                opponentBulletsRemaining: opponentState.bulletsRemaining)
+            : computeAimWithoutSun(
+                ship: ship,
+                opponent: opponent,
+                intelligence: st.aiIntelligence,
+                huntingUnarmed: huntingUnarmed,
+                isEvading: &isEvading,
+                isBraking: &isBraking,
+                currentTime: currentTime,
+                lastKillTime: getKillTime(for: opponent),
+                opponentBulletsRemaining: opponentState.bulletsRemaining)
+        
+        // Rotate toward target
+        rotateShip(ship, toward: aimTarget, dt: dt)
+        
+        // Compute thrust (updates st.aiThrustOn via inout parameter)
+        let shouldThrust = computeThrust(
+            ship: ship,
+            opponent: opponent,
+            intelligence: st.aiIntelligence,
+            huntingUnarmed: huntingUnarmed,
+            isBraking: isBraking,
+            isEvading: isEvading,
+            thrustState: &st.aiThrustOn,
+            nextThrustToggle: &st.aiNextThrustToggle,
+            currentTime: currentTime)
+        
+        // Compute firing
+        if computeFire(
+            ship: ship,
+            opponent: opponent,
+            intelligence: st.aiIntelligence,
+            isBraking: isBraking,
+            isEvading: isEvading,
+            opponentBulletsRemaining: opponentState.bulletsRemaining,
+            nextFireTime: &st.aiNextFireTime,
+            certainFireCooldown: &st.aiCertainFireCooldown,
+            visibleSince: opponentState.visibleSince,
+            currentTime: currentTime) {
+            fireMissile(from: ship, muzzleOffset: ship.muzzleOffset())
+        }
+        
+        return shouldThrust
     }
 }

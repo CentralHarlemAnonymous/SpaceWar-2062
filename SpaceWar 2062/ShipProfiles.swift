@@ -126,6 +126,25 @@ struct ShipProfile {
             armorRear:           1
         )
     }()
+    
+    // MARK: - Factory Methods
+    
+    /// Creates a flame node for thrust visualization.
+    /// This is ship-design data and belongs in the profile system.
+    func createFlameNode() -> SKShapeNode {
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: -18))
+        path.addLine(to: CGPoint(x: -7, y: -30))
+        path.addLine(to: CGPoint(x: 7, y: -30))
+        path.closeSubpath()
+        let flame = SKShapeNode(path: path)
+        flame.fillColor = .orange
+        flame.strokeColor = .yellow
+        flame.lineWidth = 1.5
+        flame.glowWidth = 3
+        flame.zPosition = 3
+        return flame
+    }
 }
 
 // MARK: - Ship
@@ -137,6 +156,8 @@ final class Ship {
     var spawnPosition: CGPoint
     let name: String
     let profile: ShipProfile
+    var score: Int = 0
+    var scoreNode: SKNode?
 
     init(profile: ShipProfile, flame: SKShapeNode, spawn: CGPoint) {
         self.profile = profile
