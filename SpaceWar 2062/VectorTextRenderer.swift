@@ -55,16 +55,21 @@ struct VectorTextRenderer {
     static func makeScoreNode(score: Int, scale: CGFloat = 1.2, spacing: CGFloat = 12) -> SKNode {
         let container = SKNode()
         let digits = Array(String(score))
+        let digitWidth: CGFloat = 10  // Width of a single digit (9 + 1 margin)
         var x: CGFloat = 0
         for ch in digits {
             if let d = Int(String(ch)) {
                 let dn = createDigitNode(d, scale: scale)
                 dn.position = CGPoint(x: x, y: 0)
                 container.addChild(dn)
-                x += spacing * scale
+                x += (digitWidth + spacing) * scale  // Use digit width + spacing
             }
         }
-        if digits.isEmpty { container.addChild(createDigitNode(0, scale: scale)) }
+        if digits.isEmpty { 
+            let dn = createDigitNode(0, scale: scale)
+            dn.position = .zero
+            container.addChild(dn)
+        }
         return container
     }
     

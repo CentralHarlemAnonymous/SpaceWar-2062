@@ -15,10 +15,12 @@ extension GameScene {
     // MARK: - Options Overlay
 
     func setupOptionsOverlay() {
+        print("  📋 setupOptionsOverlay START")
         let overlay = SKNode()
         overlay.zPosition = 200
         overlay.name = "optionsOverlay"
         overlay.position = CGPoint(x: size.width/2, y: size.height/2)
+        print("  ✅ Overlay node created")
 
         let w: CGFloat = min(380, size.width - 40)
         let h: CGFloat = 492   // +32 to accommodate second tab row
@@ -76,15 +78,12 @@ extension GameScene {
         shipSelectionTabButton?.position.y = tabRow2Y
         networkTabButton?.position.y       = tabRow2Y
 
-        // "Coming Soon" placeholder for Ship Selection tab
+        // Ship Selection tab container
         let shipSelContainer = SKNode(); shipSelContainer.zPosition = 202; shipSelContainer.isHidden = true
-        let shipSelLabel = SKLabelNode(text: "Coming Soon")
-        shipSelLabel.fontName = "AvenirNext-Bold"; shipSelLabel.fontSize = 22
-        shipSelLabel.fontColor = SKColor(white: 1.0, alpha: 0.4)
-        shipSelLabel.verticalAlignmentMode = .center; shipSelLabel.horizontalAlignmentMode = .center
-        shipSelLabel.position = .zero
-        shipSelContainer.addChild(shipSelLabel)
         overlay.addChild(shipSelContainer); shipSelectionContainer = shipSelContainer
+        
+        // DON'T build ship selection UI during init - defer until user clicks tab
+        print("  ⏭️ Skipping ship selection UI build (deferred until tab opened)")
 
         // "Coming Soon" placeholder for Network tab
         let netContainer = SKNode(); netContainer.zPosition = 202; netContainer.isHidden = true
@@ -164,26 +163,46 @@ extension GameScene {
         let aiToggleHeader = makeLabel("AI On/Off", y: aiToggleHeaderY, name: "ships_label_ai_toggle_title")
         overlay.addChild(aiToggleHeader)
 
-        let needleAIToggleLabel = SKLabelNode(text: "Needle")
+        let needleAIToggleLabel = SKLabelNode(text: "Ship 1")
         needleAIToggleLabel.fontName = "AvenirNext-Bold"; needleAIToggleLabel.fontSize = 16
         needleAIToggleLabel.fontColor = .white; needleAIToggleLabel.horizontalAlignmentMode = .left
         needleAIToggleLabel.verticalAlignmentMode = .center
         needleAIToggleLabel.position = CGPoint(x: -w/2 + 20, y: needleAIToggleY)
         needleAIToggleLabel.name = "ships_label_ai_toggle_needle"; needleAIToggleLabel.zPosition = 202
         overlay.addChild(needleAIToggleLabel)
+        
+        // Ship 1 type indicator (shows current ship name)
+        let needleShipType = SKLabelNode(text: needle?.profile.typeName ?? "")
+        needleShipType.fontName = "AvenirNext-Medium"; needleShipType.fontSize = 12
+        needleShipType.fontColor = SKColor(white: 1.0, alpha: 0.6)
+        needleShipType.horizontalAlignmentMode = .left
+        needleShipType.verticalAlignmentMode = .center
+        needleShipType.position = CGPoint(x: -w/2 + 80, y: needleAIToggleY)
+        needleShipType.name = "ships_type_needle"; needleShipType.zPosition = 202
+        overlay.addChild(needleShipType)
 
         let aiBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
         aiBtn.name = "game_ai_toggle"; aiBtn.position = CGPoint(x: 0, y: needleAIToggleY)
         aiBtn.strokeColor = .white; aiBtn.lineWidth = 2; aiBtn.zPosition = 202
         overlay.addChild(aiBtn); aiToggleButton = aiBtn
 
-        let wedgeAIToggleLabel = SKLabelNode(text: "Wedge")
+        let wedgeAIToggleLabel = SKLabelNode(text: "Ship 2")
         wedgeAIToggleLabel.fontName = "AvenirNext-Bold"; wedgeAIToggleLabel.fontSize = 16
         wedgeAIToggleLabel.fontColor = .white; wedgeAIToggleLabel.horizontalAlignmentMode = .left
         wedgeAIToggleLabel.verticalAlignmentMode = .center
         wedgeAIToggleLabel.position = CGPoint(x: -w/2 + 20, y: wedgeAIToggleY)
         wedgeAIToggleLabel.name = "ships_label_ai_toggle_wedge"; wedgeAIToggleLabel.zPosition = 202
         overlay.addChild(wedgeAIToggleLabel)
+        
+        // Ship 2 type indicator (shows current ship name)
+        let wedgeShipType = SKLabelNode(text: dart?.profile.typeName ?? "")
+        wedgeShipType.fontName = "AvenirNext-Medium"; wedgeShipType.fontSize = 12
+        wedgeShipType.fontColor = SKColor(white: 1.0, alpha: 0.6)
+        wedgeShipType.horizontalAlignmentMode = .left
+        wedgeShipType.verticalAlignmentMode = .center
+        wedgeShipType.position = CGPoint(x: -w/2 + 80, y: wedgeAIToggleY)
+        wedgeShipType.name = "ships_type_wedge"; wedgeShipType.zPosition = 202
+        overlay.addChild(wedgeShipType)
 
         let wedgeAIBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
         wedgeAIBtn.name = "game_wedge_ai_toggle"; wedgeAIBtn.position = CGPoint(x: 0, y: wedgeAIToggleY)
@@ -227,7 +246,7 @@ extension GameScene {
             else        { wedgeAISliderTrack  = track; wedgeAISliderKnob  = knob }
         }
 
-        let needleAIRowLabel = SKLabelNode(text: "Needle")
+        let needleAIRowLabel = SKLabelNode(text: "Ship 1")
         needleAIRowLabel.fontName = "AvenirNext-Bold"; needleAIRowLabel.fontSize = 16
         needleAIRowLabel.fontColor = .white; needleAIRowLabel.horizontalAlignmentMode = .left
         needleAIRowLabel.verticalAlignmentMode = .center
@@ -245,7 +264,7 @@ extension GameScene {
         needleAICountLabel.name = "count_label_needle_ai"; needleAICountLabel.zPosition = 202
         overlay.addChild(needleAICountLabel)
 
-        let wedgeAIRowLabel = SKLabelNode(text: "Wedge")
+        let wedgeAIRowLabel = SKLabelNode(text: "Ship 2")
         wedgeAIRowLabel.fontName = "AvenirNext-Bold"; wedgeAIRowLabel.fontSize = 16
         wedgeAIRowLabel.fontColor = .white; wedgeAIRowLabel.horizontalAlignmentMode = .left
         wedgeAIRowLabel.verticalAlignmentMode = .center
@@ -292,31 +311,14 @@ extension GameScene {
             else                             { dartBulletSliderTrack   = track; dartBulletSliderKnob   = knob }
         }
 
-        makeSlider(trackY: bulletsY,      namePrefix: "opt_bullets_dart_")
-        makeSlider(trackY: bulletsY - 40, namePrefix: "opt_bullets_needle_")
+        makeSlider(trackY: bulletsY,      namePrefix: "opt_bullets_needle_")
+        makeSlider(trackY: bulletsY - 40, namePrefix: "opt_bullets_dart_")
 
-        let wedgeSliderLabel = SKLabelNode(text: "Wedge")
-        wedgeSliderLabel.fontName = "AvenirNext-Bold"; wedgeSliderLabel.fontSize = 16
-        wedgeSliderLabel.fontColor = .white; wedgeSliderLabel.horizontalAlignmentMode = .left
-        wedgeSliderLabel.verticalAlignmentMode = .center
-        wedgeSliderLabel.position = CGPoint(x: -w/2 + 20, y: bulletsY)
-        wedgeSliderLabel.name = "ships_label_row_wedge"; wedgeSliderLabel.zPosition = 202
-        overlay.addChild(wedgeSliderLabel)
-
-        let wedgeCountLabel = SKLabelNode(text: "")
-        wedgeCountLabel.fontName = "AvenirNext-Bold"; wedgeCountLabel.fontSize = 16
-        wedgeCountLabel.fontColor = .white; wedgeCountLabel.horizontalAlignmentMode = .left
-        wedgeCountLabel.verticalAlignmentMode = .center
-        wedgeCountLabel.position = CGPoint(x: sliderTrackHalfWidth + 20, y: bulletsY)
-        wedgeCountLabel.name = "count_label_row_wedge"
-        wedgeCountLabel.text = bulletLabelText(dartBulletLimitSelection)
-        wedgeCountLabel.zPosition = 202; overlay.addChild(wedgeCountLabel)
-
-        let needleSliderLabel = SKLabelNode(text: "Needle")
+        let needleSliderLabel = SKLabelNode(text: "Ship 1")
         needleSliderLabel.fontName = "AvenirNext-Bold"; needleSliderLabel.fontSize = 16
         needleSliderLabel.fontColor = .white; needleSliderLabel.horizontalAlignmentMode = .left
         needleSliderLabel.verticalAlignmentMode = .center
-        needleSliderLabel.position = CGPoint(x: -w/2 + 20, y: bulletsY - 40)
+        needleSliderLabel.position = CGPoint(x: -w/2 + 20, y: bulletsY)
         needleSliderLabel.name = "ships_label_row_needle"; needleSliderLabel.zPosition = 202
         overlay.addChild(needleSliderLabel)
 
@@ -324,10 +326,31 @@ extension GameScene {
         needleCountLabel.fontName = "AvenirNext-Bold"; needleCountLabel.fontSize = 16
         needleCountLabel.fontColor = .white; needleCountLabel.horizontalAlignmentMode = .left
         needleCountLabel.verticalAlignmentMode = .center
-        needleCountLabel.position = CGPoint(x: sliderTrackHalfWidth + 20, y: bulletsY - 40)
+        needleCountLabel.position = CGPoint(x: sliderTrackHalfWidth + 20, y: bulletsY)
         needleCountLabel.name = "count_label_row_needle"
-        needleCountLabel.text = bulletLabelText(needleBulletLimitSelection)
+        if let n = needle {
+            needleCountLabel.text = bulletLabelText(needleBulletLimitSelection, for: n)
+        }
         needleCountLabel.zPosition = 202; overlay.addChild(needleCountLabel)
+
+        let wedgeSliderLabel = SKLabelNode(text: "Ship 2")
+        wedgeSliderLabel.fontName = "AvenirNext-Bold"; wedgeSliderLabel.fontSize = 16
+        wedgeSliderLabel.fontColor = .white; wedgeSliderLabel.horizontalAlignmentMode = .left
+        wedgeSliderLabel.verticalAlignmentMode = .center
+        wedgeSliderLabel.position = CGPoint(x: -w/2 + 20, y: bulletsY - 40)
+        wedgeSliderLabel.name = "ships_label_row_wedge"; wedgeSliderLabel.zPosition = 202
+        overlay.addChild(wedgeSliderLabel)
+
+        let wedgeCountLabel = SKLabelNode(text: "")
+        wedgeCountLabel.fontName = "AvenirNext-Bold"; wedgeCountLabel.fontSize = 16
+        wedgeCountLabel.fontColor = .white; wedgeCountLabel.horizontalAlignmentMode = .left
+        wedgeCountLabel.verticalAlignmentMode = .center
+        wedgeCountLabel.position = CGPoint(x: sliderTrackHalfWidth + 20, y: bulletsY - 40)
+        wedgeCountLabel.name = "count_label_row_wedge"
+        if let d = dart {
+            wedgeCountLabel.text = bulletLabelText(dartBulletLimitSelection, for: d)
+        }
+        wedgeCountLabel.zPosition = 202; overlay.addChild(wedgeCountLabel)
 
         // MARK: Gameplay tab content
         let newMatchBtn = SKShapeNode(rectOf: CGSize(width: 140, height: 36), cornerRadius: 8)
@@ -387,8 +410,11 @@ extension GameScene {
         overlay.addChild(about); aboutContainer = about
         optionsOverlay = overlay; addChild(overlay)
 
+        print("  🔄 Initial refreshOptionsUI...")
         refreshOptionsUI()
+        print("  📑 Setting initial tab to environment...")
         setOptionsTab(.environment)
+        print("  📋 setupOptionsOverlay COMPLETE")
     }
 
     func makeTabInnerLabel(_ text: String, fontSize: CGFloat = 14) -> SKLabelNode {
@@ -451,7 +477,7 @@ extension GameScene {
         let gameExclusions = ["game_ai_toggle", "game_wedge_ai_toggle"]
         let envPrefixes   = ["opt_edge_", "opt_sun_toggle", "opt_bullet_grav_toggle",
                              "opt_grav_", "env_label_", "env_gravity_group"]
-        let shipsPrefixes = ["ships_label_",
+        let shipsPrefixes = ["ships_label_", "ships_type_",
                              "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_",
                              "game_ai_toggle", "game_wedge_ai_toggle"]
 
@@ -515,11 +541,11 @@ extension GameScene {
             knob.position = CGPoint(x: x, y: track.position.y)
         }
 
-        if let label = optionsOverlay?.childNode(withName: "count_label_row_wedge") as? SKLabelNode {
-            label.text = bulletLabelText(dartBulletLimitSelection)
+        if let label = optionsOverlay?.childNode(withName: "count_label_row_wedge") as? SKLabelNode, let d = dart {
+            label.text = bulletLabelText(dartBulletLimitSelection, for: d)
         }
-        if let label = optionsOverlay?.childNode(withName: "count_label_row_needle") as? SKLabelNode {
-            label.text = bulletLabelText(needleBulletLimitSelection)
+        if let label = optionsOverlay?.childNode(withName: "count_label_row_needle") as? SKLabelNode, let n = needle {
+            label.text = bulletLabelText(needleBulletLimitSelection, for: n)
         }
 
         let aiLevelNames = ["basic", "smart", "expert"]
@@ -559,10 +585,28 @@ extension GameScene {
         if let label = optionsOverlay?.childNode(withName: "ships_label_ai_row_wedge") {
             label.alpha = wedgeAIOn ? 1.0 : 0.4
         }
+        
+        // Update ship type indicators to show current ship names
+        if let typeLabel = optionsOverlay?.childNode(withName: "ships_type_needle") as? SKLabelNode {
+            typeLabel.text = needle?.profile.typeName ?? ""
+        }
+        if let typeLabel = optionsOverlay?.childNode(withName: "ships_type_wedge") as? SKLabelNode {
+            typeLabel.text = dart?.profile.typeName ?? ""
+        }
     }
 
     func setOptionsTab(_ tab: OptionsTab) {
         currentOptionsTab = tab
+        
+        // Build ship selection UI if switching to that tab and it hasn't been built yet
+        if tab == .shipSelection, let container = shipSelectionContainer, container.children.isEmpty {
+            if let overlay = optionsOverlay {
+                let w = min(380, size.width - 40)
+                let h: CGFloat = 492
+                setupShipSelectionUI(in: overlay, panelWidth: w, panelHeight: h)
+            }
+        }
+        
         refreshOptionsUI()
     }
 

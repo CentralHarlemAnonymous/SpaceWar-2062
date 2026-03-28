@@ -743,7 +743,31 @@ extension GameScene {
         let st = state(for: ship)
         let opponentState = state(for: opponent)
         
-        guard st.aiEnabled, !ship.node.isHidden, !opponent.node.isHidden else {
+        guard st.aiEnabled, !ship.node.isHidden else {
+            return false
+        }
+        
+        // If opponent is hidden, just focus on sun avoidance
+        if opponent.node.isHidden {
+            if let sun = sunNode {
+                let dxs = sun.position.x - ship.node.position.x
+                let dys = sun.position.y - ship.node.position.y
+                let dist2 = dxs*dxs + dys*dys
+                let avoidRadius: CGFloat = 180
+                
+                // Check if we should avoid the sun
+                let tooClose = dist2 < avoidRadius * avoidRadius
+                let shouldAvoidSun = shipWillHitSun(ship, in: 3.5) || tooClose
+                
+                if shouldAvoidSun {
+                    // Aim away from sun
+                    let awayPoint = CGPoint(x: ship.node.position.x - dxs, 
+                                          y: ship.node.position.y - dys)
+                    rotateShip(ship, toward: awayPoint, dt: dt)
+                    return true  // Always thrust when escaping sun
+                }
+            }
+            // No opponent and no sun danger: idle
             return false
         }
         

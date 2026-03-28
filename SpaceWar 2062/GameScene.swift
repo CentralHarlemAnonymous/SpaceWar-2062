@@ -277,14 +277,15 @@ final class GameScene: SKScene {
 
     // MARK: - Layout
 
-    private func layoutForCurrentSize() {
+    func layoutForCurrentSize() {
         let s = self.size
         if s.width < 10 || s.height < 10 { return }
         if lastLaidOutSize == s { return }
-        lastLaidOutSize = s
-
-        // Guard against layout being called before sceneDidLoad completes
+        
+        // Guard against layout being called before ships are initialized
         guard needle != nil, dart != nil else { return }
+        
+        lastLaidOutSize = s
 
         let vw = virtualWorldWidth, vh = virtualWorldHeight
         let newNeedleSpawn = CGPoint(x: vw * 0.20, y: vh * 0.5)
@@ -335,8 +336,8 @@ final class GameScene: SKScene {
 
         // FIX #1 — respect top safe area for HUD
         let topY = s.height - 30 - safeAreaTopInset
-        needle.scoreNode?.position = CGPoint(x: 24, y: topY)
-        dart.scoreNode?.position = CGPoint(x: s.width - 24, y: topY)
+        // Scores are camera children, so they need to be positioned in camera space
+        // This is handled by updateHUDPositions, not here
         optionsButton?.position = CGPoint(x: s.width / 2, y: topY)
         optionsOverlay?.position = CGPoint(x: s.width / 2, y: s.height / 2)
 
@@ -468,13 +469,16 @@ final class GameScene: SKScene {
         dartTargetIndicator.alpha = 0
         addChild(dartTargetIndicator)
 
-        // Scores
+        // Scores - add to camera so they stay on screen
         let needleScoreNode = SKNode()
         let dartScoreNode = SKNode()
-        needleScoreNode.position = CGPoint(x: 24, y: size.height - 30)
-        dartScoreNode.position = CGPoint(x: size.width - 24, y: size.height - 30)
-        addChild(needleScoreNode)
-        addChild(dartScoreNode)
+        // Position relative to camera (will be updated with safe area in didMove)
+        needleScoreNode.position = CGPoint(x: -size.width/2 + 24, y: size.height/2 - 30 - safeAreaTopInset)
+        needleScoreNode.zPosition = 80
+        dartScoreNode.position = CGPoint(x: size.width/2 - 24, y: size.height/2 - 30 - safeAreaTopInset)
+        dartScoreNode.zPosition = 80
+        cameraNode.addChild(needleScoreNode)
+        cameraNode.addChild(dartScoreNode)
         needle.scoreNode = needleScoreNode
         dart.scoreNode = dartScoreNode
         updateScoreDisplays()
@@ -790,6 +794,7 @@ final class GameScene: SKScene {
 
     private func explodeShip(ship: Ship) {
         guard ship.isVisible else { return }
+        
         enableRandomRespawn = true
         let originalVelocity = ship.velocity
 
@@ -818,7 +823,7 @@ final class GameScene: SKScene {
 
         let pieces = ship.createDebrisPieces()
 
-        let lifetime: CGFloat = 2.6
+        let lifetime: CGFloat = 1.5  // Reduced from 2.6 to 1.5 seconds
         let ownerNode = ship.node
         wreckPieceCount.setObject(NSNumber(value: pieces.count), forKey: ownerNode)
         for piece in pieces {
@@ -911,17 +916,49 @@ final class GameScene: SKScene {
 
     // MARK: - Score rendering
 
-    private func updateScoreDisplays() {
-        needle.scoreNode?.removeAllChildren()
-        dart.scoreNode?.removeAllChildren()
+    func updateScoreDisplays() {
+        // Completely recreate the score nodes to ensure clean slate
+        needle.scoreNode?.removeFromParent()
+        dart.scoreNode?.removeFromParent()
+        
+        // Create fresh score node containers WITH POSITIONS
+        let needleScoreNode = SKNode()
+        let dartScoreNode = SKNode()
+        needleScoreNode.zPosition = 80
+        dartScoreNode.zPosition = 80
+        
+        // Set positions BEFORE adding to camera to prevent flash at (0,0)
+        needleScoreNode.position = CGPoint(x: -size.width/2 + 24, y: size.height/2 - 30 - safeAreaTopInset)
+        dartScoreNode.position = CGPoint(x: size.width/2 - 24, y: size.height/2 - 30 - safeAreaTopInset)
+        
+        // Add to camera
+        cameraNode.addChild(needleScoreNode)
+        cameraNode.addChild(dartScoreNode)
+        
+        // Update references
+        needle.scoreNode = needleScoreNode
+        dart.scoreNode = dartScoreNode
         
         let left = VectorTextRenderer.makeScoreNode(score: needle.score)
         let right = VectorTextRenderer.makeScoreNode(score: dart.score)
-        left.position = .zero
-        right.position = CGPoint(x: -right.calculateAccumulatedFrame().width, y: 0)
         
-        needle.scoreNode?.addChild(left)
-        dart.scoreNode?.addChild(right)
+        // Ship 1 (needle) - align left from scoreNode position
+        left.position = .zero
+        
+        // Ship 2 (dart) - align right from scoreNode position
+        // Calculate width manually: numDigits * digitWidth + (numDigits - 1) * spacing, all scaled
+        let scale: CGFloat = 1.2  // Default scale from makeScoreNode
+        let digitWidth: CGFloat = 10
+        let spacing: CGFloat = 12
+        let numDigits = max(1, String(dart.score).count)
+        let rightWidth = (CGFloat(numDigits) * digitWidth + CGFloat(numDigits - 1) * spacing) * scale
+        right.position = CGPoint(x: -rightWidth, y: 0)
+        
+        needleScoreNode.addChild(left)
+        dartScoreNode.addChild(right)
+        
+        // Ensure positions are correct in camera space
+        updateHUDPositions()
     }
     
     // MARK: - Countdown Timer
@@ -954,11 +991,11 @@ final class GameScene: SKScene {
         if countdownContainerNode == nil {
             let container = SKNode()
             container.zPosition = 1000
-            addChild(container)
+            cameraNode.addChild(container)  // Add to camera, not scene
             countdownContainerNode = container
         }
-        countdownContainerNode!.position = CGPoint(x: cameraCenter.x,
-                                                   y: cameraCenter.y + size.height * 0.28)
+        // Position relative to camera center (which is at 0,0 in camera space)
+        countdownContainerNode!.position = CGPoint(x: 0, y: size.height * 0.28)
     }
     
     private func updateCountdown(currentTime: TimeInterval) {
@@ -968,8 +1005,8 @@ final class GameScene: SKScene {
         let remaining = 5 - Int(elapsed)
 
         if remaining > 0 {
-            countdownContainerNode?.position = CGPoint(x: cameraCenter.x,
-                                                       y: cameraCenter.y + size.height * 0.28)
+            // Position is already set relative to camera (0, height*0.28)
+            // No need to reposition every frame since it's a camera child
 
             if remaining != lastDisplayedCountdownNumber {
                 lastDisplayedCountdownNumber = remaining
@@ -1004,14 +1041,26 @@ final class GameScene: SKScene {
         }
     }
 
-    func bulletLabelText(_ selection: Int) -> String {
-        if let n = bulletsForSelection(selection) { return "\(n)" }
-        return "∞"
+    func bulletLabelText(_ selection: Int, for ship: Ship) -> String {
+        guard let base = bulletsForSelection(selection) else { return "∞" }
+        let multiplied = Int(CGFloat(base) * ship.profile.inventory.multiplier)
+        return "\(multiplied)"
     }
 
     func resetBulletCountsFromSelections() {
-        needleBulletsRemaining = bulletsForSelection(needleBulletLimitSelection) ?? Int.max
-        dartBulletsRemaining   = bulletsForSelection(dartBulletLimitSelection)   ?? Int.max
+        // Apply inventory multiplier from ship profile
+        if let baseNeedle = bulletsForSelection(needleBulletLimitSelection) {
+            needleBulletsRemaining = Int(CGFloat(baseNeedle) * needle.profile.inventory.multiplier)
+        } else {
+            needleBulletsRemaining = Int.max
+        }
+        
+        if let baseDart = bulletsForSelection(dartBulletLimitSelection) {
+            dartBulletsRemaining = Int(CGFloat(baseDart) * dart.profile.inventory.multiplier)
+        } else {
+            dartBulletsRemaining = Int.max
+        }
+        
         refreshBulletCounters()
     }
 
@@ -1151,7 +1200,7 @@ final class GameScene: SKScene {
         addChild(boundary); virtualBoundaryNode = boundary
     }
 
-    private func setupDirectionArrows() {
+    func setupDirectionArrows() {
         // Remove any existing pointers
         needleDirectionArrow?.removeFromParent()
         dartDirectionArrow?.removeFromParent()
@@ -1248,9 +1297,10 @@ final class GameScene: SKScene {
     // MARK: - Camera update (called every frame from update())
 
     private func updateCamera(currentTime: TimeInterval, dt: TimeInterval) {
-        guard virtualScreenMode != .off else {
+        if virtualScreenMode == .off {
             cameraCenter = CGPoint(x: size.width / 2, y: size.height / 2)
             cameraNode.position = cameraCenter
+            updateHUDPositions()  // Still need to position HUD elements
             updateDirectionArrows()
             return
         }
@@ -1284,22 +1334,24 @@ final class GameScene: SKScene {
     private func updateHUDPositions() {
         let cx = cameraCenter.x, cy = cameraCenter.y
         let sw = size.width,     sh = size.height
-        let topY    = cy + sh/2 - 30 - safeAreaTopInset
-        let bottomY = cy - sh/2 + safeAreaBottomInset
+        let topY    = sh/2 - 30 - safeAreaTopInset
+        let bottomY = -sh/2 + safeAreaBottomInset
         let br: CGFloat = 40
         let padding: CGFloat = 12
 
-        needle.scoreNode?.position = CGPoint(x: cx - sw/2 + 24, y: topY)
-        dart.scoreNode?.position = CGPoint(x: cx + sw/2 - 24, y: topY)
-        optionsButton?.position = CGPoint(x: cx, y: topY)
+        // Scores are camera children, so position relative to camera center (0,0)
+        needle.scoreNode?.position = CGPoint(x: -sw/2 + 24, y: topY)
+        dart.scoreNode?.position = CGPoint(x: sw/2 - 24, y: topY)
+        
+        // Options button is a scene child, so use world coordinates
+        optionsButton?.position = CGPoint(x: cx, y: cy + topY)
         optionsOverlay?.position = CGPoint(x: cx, y: cy)
 
         let fireX = cx + sw/2 - br - 20
-        let fireY = bottomY + br + 20
+        let fireY = cy + bottomY + br + 20
         fireThrustButton?.position  = CGPoint(x: fireX, y: fireY)
         rightThrustButton?.position = CGPoint(x: fireX - (br * 2 + padding), y: fireY)
 
-        let firePos = CGPoint(x: fireX, y: fireY)
         dartBulletCounterNode?.position  = CGPoint(x: fireX, y: fireY + br + 20)
         rightClusterTitle?.position      = CGPoint(x: fireX - (br + padding / 2),
                                                     y: fireY + br + 50)
@@ -1311,7 +1363,6 @@ final class GameScene: SKScene {
         leftThrustButton?.position   = CGPoint(x: leftFireX + (br * 2 + padding), y: leftFireY)
         needleBulletCounterNode?.position = CGPoint(x: leftFireX, y: leftFireY + br + 20)
         leftClusterTitle?.position        = CGPoint(x: leftFireX, y: leftFireY + br + 50)
-        _ = firePos
         #endif
     }
 
@@ -1456,26 +1507,30 @@ final class GameScene: SKScene {
 
     private func respawnShip(_ ship: Ship) {
         let st = state(for: ship)
+        
+        // Always try to find a new safe random position if random respawn is enabled
+        // This ensures we don't get stuck with a stale respawnTarget that's now occupied
         let pos: CGPoint
-        if st.respawnTarget != .zero { 
-            pos = st.respawnTarget 
-        } else if enableRandomRespawn, let p = safeRandomPosition(avoiding: ship) { 
-            pos = p 
-        } else { 
-            pos = ship.spawnPosition 
+        if enableRandomRespawn, let p = safeRandomPosition(avoiding: ship) {
+            pos = p
+        } else if st.respawnTarget != .zero {
+            pos = st.respawnTarget
+        } else {
+            pos = ship.spawnPosition
         }
         
         let otherShip: Ship = (ship === needle) ? dart! : needle!
         if !otherShip.node.isHidden {
             let dx = pos.x - otherShip.node.position.x
             let dy = pos.y - otherShip.node.position.y
+            let dist = sqrt(dx*dx + dy*dy)
             let minSafeDist: CGFloat = 300
             if dx*dx + dy*dy < minSafeDist*minSafeDist {
-                let st = state(for: ship)
-                let now = CACurrentMediaTime()
-                
+                // Don't respawn yet - too close to other ship
+                // Keep the original destroyTime so the respawn timer continues from when ship exploded
+                // Clear the stale respawnTarget so we try a new position next time
+                st.respawnTarget = .zero
                 st.respawnScheduled = true
-                st.destroyTime = now
                 return
             }
         }
@@ -1484,6 +1539,8 @@ final class GameScene: SKScene {
         ship.node.zRotation = 0
         ship.velocity = .zero
         ship.show()
+        // Clear respawnTarget after successful respawn
+        st.respawnTarget = .zero
     }
 
     // MARK: - Update loop
@@ -1515,6 +1572,7 @@ final class GameScene: SKScene {
         for ship in ships {
             let st = state(for: ship)
             if st.respawnScheduled && ship.node.isHidden {
+                let elapsed = currentTime - st.destroyTime
                 if currentTime - st.destroyTime >= respawnBulletLife {
                     st.respawnScheduled = false
                     respawnShip(ship)
@@ -1770,7 +1828,7 @@ final class GameScene: SKScene {
                 let dx = needle.node.position.x - sun.position.x
                 let dy = needle.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    if !gameOver { dart.score += 1; updateScoreDisplays() }
+                    if !gameOver { incrementScore(for: dart) }
                     explodeShip(ship: needle)
                 }
             }
@@ -1778,7 +1836,7 @@ final class GameScene: SKScene {
                 let dx = dart.node.position.x - sun.position.x
                 let dy = dart.node.position.y - sun.position.y
                 if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
-                    if !gameOver { needle.score += 1; updateScoreDisplays() }
+                    if !gameOver { incrementScore(for: needle) }
                     explodeShip(ship: dart)
                 }
             }
@@ -1802,19 +1860,46 @@ final class GameScene: SKScene {
             for ship in self.ships {
                 let shipKey = ObjectIdentifier(ship.node)
                 guard !ship.node.isHidden,
-                      !shipsHit.contains(shipKey),  // Don't hit same ship twice
+                      !shipsHit.contains(shipKey),  // Don't hit same ship twice in one frame
                       node.frame.intersects(ship.node.frame) else { continue }
                 
                 // Apply grace period: skip if owner shot itself within 1 second
                 if owner === ship.node && grace { continue }
                 
-                // Valid hit!
-                shipsHit.insert(shipKey)
+                // Determine which ship fired this bullet and get its bullet power
+                let shooterShip = self.ships.first { $0.node === owner }
+                let damage = shooterShip?.profile.bulletPower.damage ?? 1.0
+                
+                // Determine if hit was from rear (bullet came from behind the ship)
+                // Ship's forward direction is along its zRotation + π/2
+                let shipForward = ship.node.zRotation + .pi / 2
+                // Calculate angle FROM ship TO bullet
+                let dx = node.position.x - ship.node.position.x
+                let dy = node.position.y - ship.node.position.y
+                let hitAngle = atan2(dy, dx)
+                var angleDiff = hitAngle - shipForward
+                // Normalize to [-π, π]
+                while angleDiff > .pi { angleDiff -= 2 * .pi }
+                while angleDiff < -.pi { angleDiff += 2 * .pi }
+                // Hit is from rear if bullet is within ±90° of directly BEHIND ship (at π radians from forward)
+                // angleDiff ≈ 0 means bullet is in front; angleDiff ≈ ±π means bullet is behind
+                let fromRear = abs(angleDiff) > .pi / 2
+                
+                // Apply damage
+                let destroyed = ship.takeDamage(damage, fromRear: fromRear)
+                
+                // Remove the bullet
                 node.removeFromParent()
                 
-                // Update legacy hit flags for backward compatibility
-                if ship === self.needle { needleHit = true }
-                if ship === self.dart { dartHit = true }
+                // If ship is destroyed, mark it for explosion
+                if destroyed {
+                    shipsHit.insert(shipKey)
+                    
+                    // Update legacy hit flags for backward compatibility
+                    if ship === self.needle { needleHit = true }
+                    if ship === self.dart { dartHit = true }
+                }
+                
                 break  // Bullet can only hit one ship
             }
         }
@@ -1826,6 +1911,7 @@ final class GameScene: SKScene {
                 guard !ships[j].node.isHidden,
                       ships[i].node.frame.intersects(ships[j].node.frame) else { continue }
                 
+                // Ship collision = instant kill for both (ram damage)
                 let key1 = ObjectIdentifier(ships[i].node)
                 let key2 = ObjectIdentifier(ships[j].node)
                 shipsHit.insert(key1)
@@ -1887,6 +1973,14 @@ final class GameScene: SKScene {
                     aimPersistsAfterLift.toggle(); refreshOptionsUI(); handled = true
                 }
                 if handled { continue }
+                
+                // Handle ship selection wheel touches
+                if currentOptionsTab == .shipSelection {
+                    if handleShipWheelTouch(at: location) {
+                        handled = true
+                        continue
+                    }
+                }
                 
                 if currentOptionsTab == .environment {
                     if let btn = edgeBounceButton, btn.contains(locInOverlay) {
