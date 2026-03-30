@@ -5,7 +5,6 @@
 //  Created by Michael Stern on 3/15/26.
 //
 
-
 // GameScene+Options.swift
 
 import SpriteKit
@@ -96,18 +95,7 @@ extension GameScene {
         overlay.addChild(netContainer); networkContainer = netContainer
 
         // MARK: Environment tab content
-        let screenEdgeLabel = makeLabel("Screen Edge:", y: h/2 - 122, name: "env_label_screen_edge")
-        overlay.addChild(screenEdgeLabel)
-
-        let bounceBtn = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        bounceBtn.name = "opt_edge_bounce"; bounceBtn.position = CGPoint(x: -60, y: h/2 - 147)
-        bounceBtn.strokeColor = .white; bounceBtn.lineWidth = 2; bounceBtn.zPosition = 202; overlay.addChild(bounceBtn)
-        bounceBtn.addChild(makeTabInnerLabel("Bounce")); edgeBounceButton = bounceBtn
-
-        let wrapBtn = SKShapeNode(rectOf: CGSize(width: 90, height: 28), cornerRadius: 6)
-        wrapBtn.name = "opt_edge_wrap"; wrapBtn.position = CGPoint(x: 60, y: h/2 - 147)
-        wrapBtn.strokeColor = .white; wrapBtn.lineWidth = 2; wrapBtn.zPosition = 202; overlay.addChild(wrapBtn)
-        wrapBtn.addChild(makeTabInnerLabel("Wrap")); edgeWrapButton = wrapBtn
+        // Removed Screen Edge UI elements as per instructions
 
         let gravityHeading = makeLabel("Gravity", y: h/2 - 222, name: "env_label_gravity")
         overlay.addChild(gravityHeading)
@@ -386,7 +374,7 @@ extension GameScene {
         vsTrack.name = "game_vs_track"; vsTrack.zPosition = 202; overlay.addChild(vsTrack)
         virtualScreenSliderTrack = vsTrack
 
-        let vsLabels = ["off", "3000"]
+        let vsLabels = ["off", "on"]
         for i in 0...virtualScreenSteps {
             let x = -sliderTrackHalfWidth + CGFloat(i) * (sliderTrackWidth / CGFloat(virtualScreenSteps))
             let tick = SKShapeNode(circleOfRadius: 3)
@@ -484,7 +472,7 @@ extension GameScene {
         let gamePrefixes  = ["game_"]
         // AI toggle buttons live in Controls tab despite having game_ prefix
         let gameExclusions = ["game_ai_toggle", "game_wedge_ai_toggle"]
-        let envPrefixes   = ["opt_edge_", "opt_sun_toggle", "opt_bullet_grav_toggle",
+        let envPrefixes   = ["opt_sun_toggle", "opt_bullet_grav_toggle",
                              "opt_grav_", "env_label_", "env_gravity_group"]
         let shipsPrefixes = ["ships_label_", "ships_type_",
                              "opt_bullets_", "count_label_", "opt_needle_ai_", "opt_wedge_ai_",
@@ -524,8 +512,9 @@ extension GameScene {
         setTab(shipSelectionTabButton, selected: currentOptionsTab == .shipSelection)
         setTab(networkTabButton,       selected: currentOptionsTab == .network)
 
-        styleBtn(edgeBounceButton,   selected: edgeBehavior == .bounce)
-        styleBtn(edgeWrapButton,     selected: edgeBehavior == .wrap)
+        // Removed styling for removed edge buttons
+        // styleBtn(edgeBounceButton,   selected: edgeBehavior == .bounce)
+        // styleBtn(edgeWrapButton,     selected: edgeBehavior == .wrap)
 
         aiToggleButton?.fillColor      = needleAIEnabled ? selFill : offFill
         wedgeAIToggleButton?.fillColor = wedgeAIEnabled  ? selFill : offFill
@@ -558,7 +547,7 @@ extension GameScene {
             label.text = bulletLabelText(needleBulletLimitSelection, for: n)
         }
 
-        let aiLevelNames = ["basic", "smart", "expert"]
+        let aiLevelNames = ["basic", "smart", "expert", "neural"]
 
         let needleAIOn = needleAIEnabled
         needleAISliderTrack?.alpha = needleAIOn ? 1.0 : 0.4

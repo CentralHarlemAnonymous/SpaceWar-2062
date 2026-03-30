@@ -35,15 +35,11 @@ extension GameScene {
             y: targetPos.y + targetVel.dy * t + 0.5 * acc.dy * t * t)
     }
     
-    /// Level-2 firing solution: quadratic prediction aimed at the nearest virtual
-    /// copy of the target (for wrap mode), with 15 iterations for accuracy.
+    /// Level-3 firing solution: quadratic prediction with 15 iterations for accuracy.
     func level3AimPoint(shooter: Ship, target: Ship) -> CGPoint {
         let bulletSpeed = shooter.profile.bulletSpeed
         let origin = shooter.node.position
-        var targetPos = target.node.position
-        if edgeBehavior == .wrap {
-            targetPos = nearestVirtualPosition(of: targetPos, from: origin)
-        }
+        let targetPos = target.node.position
         let targetVel = target.velocity
         let acc = state(for: target).smoothedAcceleration
         var t = hypot(targetPos.x - origin.x, targetPos.y - origin.y) / bulletSpeed
@@ -55,10 +51,6 @@ extension GameScene {
         let predicted = CGPoint(
             x: targetPos.x + targetVel.dx * t + 0.5 * acc.dx * t * t,
             y: targetPos.y + targetVel.dy * t + 0.5 * acc.dy * t * t)
-        if edgeBehavior == .bounce {
-            return CGPoint(x: max(0, min(virtualWorldWidth,  predicted.x)),
-                           y: max(0, min(virtualWorldHeight, predicted.y)))
-        }
         return predicted
     }
     
@@ -124,24 +116,27 @@ extension GameScene {
         return false
     }
     
-    // MARK: - Wrap Mode Helpers
+    // MARK: - World Geometry Helpers
     
-    /// In wrap mode, returns the nearest torus-copy of `targetPos` to `origin`.
+    /// Returns `targetPos` directly (no wrapping — the world is a bounded circle).
     func nearestVirtualPosition(of targetPos: CGPoint, from origin: CGPoint) -> CGPoint {
-        guard edgeBehavior == .wrap else { return targetPos }
-        let W = virtualWorldWidth, H = virtualWorldHeight
-        var best = targetPos
-        var bestD2 = CGFloat.greatestFiniteMagnitude
-        for ix in [-1, 0, 1] as [CGFloat] {
-            for iy in [-1, 0, 1] as [CGFloat] {
-                let candidate = CGPoint(x: targetPos.x + ix * W,
-                                        y: targetPos.y + iy * H)
-                let d2 = (candidate.x - origin.x) * (candidate.x - origin.x)
-                       + (candidate.y - origin.y) * (candidate.y - origin.y)
-                if d2 < bestD2 { bestD2 = d2; best = candidate }
-            }
+        return targetPos
+    }
+
+    /// Clamp a point to lie within the play field (with inset margin).
+    /// Rectangular when virtual screen is off, circular when on.
+    func clampToWorld(_ p: CGPoint, margin: CGFloat = 50) -> CGPoint {
+        if virtualScreenMode == .off {
+            return CGPoint(x: max(margin, min(size.width  - margin, p.x)),
+                           y: max(margin, min(size.height - margin, p.y)))
         }
-        return best
+        let center = virtualWorldCenter
+        let r = virtualWorldRadius - margin
+        let dx = p.x - center.x, dy = p.y - center.y
+        let dist = hypot(dx, dy)
+        guard dist > r else { return p }
+        return CGPoint(x: center.x + dx / dist * r,
+                       y: center.y + dy / dist * r)
     }
     
     // MARK: - Strategic AI (Level 2+)
@@ -173,9 +168,7 @@ extension GameScene {
     /// When hunting an unarmed opponent, blend direct pursuit with intercept.
     func huntAimPoint(shooter: Ship, target: Ship) -> CGPoint {
         let myPos = shooter.node.position
-        let oppPos = (edgeBehavior == .wrap)
-            ? nearestVirtualPosition(of: target.node.position, from: myPos)
-            : target.node.position
+        let oppPos = target.node.position
         let dist = hypot(oppPos.x - myPos.x, oppPos.y - myPos.y)
         let closeThreshold: CGFloat = 60
         let farThreshold:   CGFloat = 120
@@ -337,9 +330,7 @@ extension GameScene {
         }
 
         if let opp = opponent, !opp.node.isHidden {
-            let oppPos = (edgeBehavior == .wrap)
-                ? nearestVirtualPosition(of: opp.node.position, from: ship.node.position)
-                : opp.node.position
+            let oppPos = opp.node.position
             let odx = oppPos.x - ship.node.position.x
             let ody = oppPos.y - ship.node.position.y
             let dist = hypot(odx, ody)
@@ -366,9 +357,7 @@ extension GameScene {
         }
 
         let myPos  = ship.node.position
-        let oppPos = (edgeBehavior == .wrap)
-            ? nearestVirtualPosition(of: opponent.node.position, from: myPos)
-            : opponent.node.position
+        let oppPos = opponent.node.position
 
         let dx   = myPos.x - oppPos.x
         let dy   = myPos.y - oppPos.y
@@ -385,9 +374,7 @@ extension GameScene {
             let invSpd = 1.0 / oppSpeed
             let behindX = oppPos.x - opponent.velocity.dx * invSpd * 280
             let behindY = oppPos.y - opponent.velocity.dy * invSpd * 280
-            let m: CGFloat = 50
-            return CGPoint(x: max(m, min(virtualWorldWidth  - m, behindX)),
-                           y: max(m, min(virtualWorldHeight - m, behindY)))
+            return clampToWorld(CGPoint(x: behindX, y: behindY))
         }
 
         let perpX: CGFloat
@@ -410,25 +397,12 @@ extension GameScene {
                 let sdx = p.x - sun.position.x, sdy = p.y - sun.position.y
                 s += 60_000 / max(sdx*sdx + sdy*sdy, 1)
             }
-            if edgeBehavior == .bounce {
-                let margin: CGFloat = 90
-                let ex = min(p.x, size.width  - p.x)
-                let ey = min(p.y, size.height - p.y)
-                if ex < margin { s += (margin - ex) * 4 }
-                if ey < margin { s += (margin - ey) * 4 }
-            }
             let tdx = p.x - myPos.x, tdy = p.y - myPos.y
             s += hypot(tdx, tdy) * 0.08
             return s
         }
 
-        func clamp(_ p: CGPoint) -> CGPoint {
-            let m: CGFloat = 50
-            return CGPoint(x: max(m, min(virtualWorldWidth  - m, p.x)),
-                           y: max(m, min(virtualWorldHeight - m, p.y)))
-        }
-
-        return score(c1) <= score(c2) ? clamp(c1) : clamp(c2)
+        return score(c1) <= score(c2) ? clampToWorld(c1) : clampToWorld(c2)
     }
     
     // MARK: - Rotation Helpers
@@ -675,9 +649,7 @@ extension GameScene {
             if isBraking {
                 shouldFire = false
             } else if huntingUnarmed {
-                let oppPos = (edgeBehavior == .wrap)
-                    ? nearestVirtualPosition(of: opponent.node.position, from: ship.node.position)
-                    : opponent.node.position
+                let oppPos = opponent.node.position
                 let ddx = oppPos.x - ship.node.position.x
                 let ddy = oppPos.y - ship.node.position.y
                 let oppDist = hypot(ddx, ddy)
@@ -833,3 +805,4 @@ extension GameScene {
         return shouldThrust
     }
 }
+
