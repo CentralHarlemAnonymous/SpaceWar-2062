@@ -95,6 +95,15 @@ final class GameScene: SKScene {
     // Game options
     var aimPersistsAfterLift: Bool = true
     var aimPersistToggleButton: SKShapeNode?
+    
+    // Mystery Ship
+    var mysteryShipEnabled: Bool = true
+    var mysteryShipToggleButton: SKShapeNode?
+    var mysteryShip: Ship?
+    var mysteryShipSpawnTimer: TimeInterval = 0
+    var mysteryShipLastRetargetTime: TimeInterval = 0
+    let mysteryShipSpawnDelay: TimeInterval = 60.0
+    let mysteryShipRetargetInterval: TimeInterval = 30.0
 
     var activeAimTouches = Set<UITouch>()
 
@@ -205,6 +214,7 @@ final class GameScene: SKScene {
     var needleDirectionArrow: SKShapeNode?
     var dartDirectionArrow:   SKShapeNode?
     var sunDirectionArrow:    SKShapeNode?   // always points to virtual world centre
+    var mysteryShipDirectionArrow: SKShapeNode?  // points to Mystery Ship when off-screen
     var needleDistanceLabel:  SKLabelNode?   // distance readout beside needle edge arrow
     var dartDistanceLabel:    SKLabelNode?   // distance readout beside dart edge arrow
 
@@ -809,6 +819,12 @@ final class GameScene: SKScene {
         st.cameraPanAfter = now + panDelay
 
         ship.hide()
+        
+        // Reset mystery ship spawn timer on ANY explosion of needle or dart
+        // (regardless of who killed them)
+        if ship === needle || ship === dart {
+            mysteryShipSpawnTimer = 0
+        }
 
         if gameOver {
             if ship === needle { gameOverNeedleAILevel = Int.random(in: 0...2) }
@@ -839,6 +855,175 @@ final class GameScene: SKScene {
             wreckOwner.setObject(ownerNode, forKey: piece)
             addChild(piece)
         }
+        
+        // Handle Mystery Ship special case
+        if ship === mysteryShip {
+            explodeMysteryShip(at: ship.node.position, velocity: originalVelocity)
+        }
+    }
+    
+    // MARK: - Mystery Ship
+    
+    private func updateMysteryShipSpawning(currentTime: TimeInterval) {
+        guard mysteryShipEnabled else { return }
+        
+        // Check if both main ships are visible
+        let bothShipsAlive = !needle.node.isHidden && !dart.node.isHidden
+        
+        if bothShipsAlive {
+            mysteryShipSpawnTimer += (currentTime - lastUpdateTime)
+        }
+        
+        // Spawn Mystery Ship if timer reached and no mystery ship exists
+        if mysteryShipSpawnTimer >= mysteryShipSpawnDelay && mysteryShip == nil {
+            spawnMysteryShip(currentTime: currentTime)
+        }
+        
+        // Update AI retargeting if 3+ ships present
+        if ships.count >= 3 && currentTime - mysteryShipLastRetargetTime >= mysteryShipRetargetInterval {
+            retargetAllAI(currentTime: currentTime)
+            mysteryShipLastRetargetTime = currentTime
+        }
+    }
+    
+    private func spawnMysteryShip(currentTime: TimeInterval) {
+        // Create mystery ship at random position
+        let randomPos = CGPoint(
+            x: CGFloat.random(in: 100...(virtualWorldWidth - 100)),
+            y: CGFloat.random(in: 100...(virtualWorldHeight - 100))
+        )
+        
+        let mystery = Ship(
+            profile: .mysteryShip,
+            flame: ShipProfile.mysteryShip.createFlameNode(),
+            spawn: randomPos
+        )
+        
+        mysteryShip = mystery
+        ships.append(mystery)
+        addChild(mystery.node)
+        
+        // Set up AI with random intelligence
+        let mysteryState = state(for: mystery)
+        mysteryState.aiEnabled = true
+        mysteryState.aiIntelligence = Int.random(in: 0...2)
+        mysteryState.visibleSince = currentTime
+        mysteryState.bulletLimitSelection = 1
+        
+        // Create direction arrow for Mystery Ship
+        let p = mystery.profile
+        let ptr = SKShapeNode(path: p.indicatorPath)
+        ptr.strokeColor = p.indicatorColor
+        ptr.fillColor = .clear
+        ptr.lineWidth = p.indicatorLineWidth
+        ptr.glowWidth = p.indicatorGlowWidth
+        ptr.alpha = 0
+        ptr.zPosition = 90
+        ptr.name = "dirArrow"
+        addChild(ptr)
+        mysteryShipDirectionArrow = ptr
+        
+        // Reset spawn timer
+        mysteryShipSpawnTimer = 0
+        
+        // Trigger retargeting for all AI
+        retargetAllAI(currentTime: currentTime)
+        mysteryShipLastRetargetTime = currentTime
+        
+        print("🛸 Mystery Ship spawned at \(randomPos) with AI level \(mysteryState.aiIntelligence)")
+    }
+    
+    private func despawnMysteryShip() {
+        guard let mystery = mysteryShip else { return }
+        
+        mystery.node.removeFromParent()
+        ships.removeAll { $0 === mystery }
+        
+        // Remove state
+        shipStates.removeValue(forKey: ObjectIdentifier(mystery.node))
+        
+        // Remove direction arrow
+        mysteryShipDirectionArrow?.removeFromParent()
+        mysteryShipDirectionArrow = nil
+        
+        mysteryShip = nil
+        mysteryShipSpawnTimer = 0
+        
+        print("🛸 Mystery Ship despawned")
+    }
+    
+    private func explodeMysteryShip(at position: CGPoint, velocity: CGVector) {
+        // Award random bonus points (2-10) to the killer
+        // The killer will be determined by checking which ship's bullet hit it
+        // For now, we'll display the bonus at the explosion site
+        
+        // Mystery ship will respawn after timer if toggle is still on
+        // The normal explodeShip already removed it, so just clean up
+        ships.removeAll { $0 === mysteryShip }
+        mysteryShip = nil
+        mysteryShipSpawnTimer = 0
+        
+        print("💥 Mystery Ship destroyed!")
+    }
+    
+    private func awardMysteryShipBonus(to ship: Ship, at position: CGPoint) {
+        let bonusPoints = Int.random(in: 2...10)
+        ship.score += bonusPoints
+        updateScoreDisplays()
+        
+        // Display bonus points at explosion site with 5-second fade
+        displayBonusPoints(bonusPoints, at: position)
+        
+        print("⭐ \(ship.profile.typeName) earned \(bonusPoints) bonus points from Mystery Ship!")
+    }
+    
+    private func displayBonusPoints(_ points: Int, at position: CGPoint) {
+        let bonusNode = VectorTextRenderer.makeScoreNode(score: points, scale: 2.0, spacing: 16)
+        bonusNode.position = position
+        bonusNode.zPosition = 100
+        bonusNode.alpha = 1.0
+        addChild(bonusNode)
+        
+        // Fade out over 5 seconds
+        let fadeAction = SKAction.sequence([
+            SKAction.wait(forDuration: 4.0),
+            SKAction.fadeOut(withDuration: 1.0),
+            SKAction.removeFromParent()
+        ])
+        bonusNode.run(fadeAction)
+    }
+    
+    private func retargetAllAI(currentTime: TimeInterval) {
+        // When 3+ ships present, all AI should target whichever ship is closest
+        guard ships.count >= 3 else { return }
+        
+        for ship in ships {
+            let st = state(for: ship)
+            guard st.aiEnabled else { continue }
+            
+            // Find closest opponent
+            var closestShip: Ship?
+            var closestDist: CGFloat = .greatestFiniteMagnitude
+            
+            for otherShip in ships {
+                guard otherShip !== ship, !otherShip.node.isHidden else { continue }
+                
+                let dx = otherShip.node.position.x - ship.node.position.x
+                let dy = otherShip.node.position.y - ship.node.position.y
+                let dist = sqrt(dx*dx + dy*dy)
+                
+                if dist < closestDist {
+                    closestDist = dist
+                    closestShip = otherShip
+                }
+            }
+            
+            // Store target (we'll need to modify AI logic to use this)
+            // For now, the AI will continue using its default opponent
+            // but we've set up the retargeting infrastructure
+        }
+        
+        print("🎯 AI retargeting complete (3+ ships present)")
     }
 
     // MARK: - Match control
@@ -856,6 +1041,11 @@ final class GameScene: SKScene {
         updateScoreDisplays()
         enableRandomRespawn = false
         needle.reset(); dart.reset()
+        
+        // Despawn Mystery Ship if present
+        if mysteryShip != nil {
+            despawnMysteryShip()
+        }
         
         let now = CACurrentMediaTime()
         needleState.visibleSince = now
@@ -1028,6 +1218,9 @@ final class GameScene: SKScene {
             countdownContainerNode?.removeFromParent()
             countdownContainerNode = nil
             lastDisplayedCountdownNumber = -1
+            
+            // Start Mystery Ship spawn timer when countdown ends
+            mysteryShipSpawnTimer = 0
         }
     }
     
@@ -1205,6 +1398,7 @@ final class GameScene: SKScene {
         needleDirectionArrow?.removeFromParent()
         dartDirectionArrow?.removeFromParent()
         sunDirectionArrow?.removeFromParent()
+        mysteryShipDirectionArrow?.removeFromParent()
         needleDistanceLabel?.removeFromParent()
         dartDistanceLabel?.removeFromParent()
 
@@ -1390,6 +1584,7 @@ final class GameScene: SKScene {
             needleDirectionArrow?.alpha = 0
             dartDirectionArrow?.alpha   = 0
             sunDirectionArrow?.alpha    = 0
+            mysteryShipDirectionArrow?.alpha = 0
             needleDistanceLabel?.alpha  = 0
             dartDistanceLabel?.alpha    = 0
             return
@@ -1433,6 +1628,16 @@ final class GameScene: SKScene {
             }
         } else {
             dartDistanceLabel?.alpha = 0
+        }
+        
+        // --- Mystery Ship pointer ---
+        if let mystery = mysteryShip, !mystery.node.isHidden {
+            if positionPointer(mysteryShipDirectionArrow, towardPoint: mystery.node.position) {
+                mysteryShipDirectionArrow?.zRotation = mystery.node.zRotation
+                mysteryShipDirectionArrow?.alpha = 0.7
+            }
+        } else {
+            mysteryShipDirectionArrow?.alpha = 0
         }
 
         // --- Sun pointer: only when sun is off-screen ---
@@ -1562,9 +1767,13 @@ final class GameScene: SKScene {
         if optionsVisible {
             needleTargetIndicator.alpha = 0
             dartTargetIndicator.alpha = 0
+            // Pause mystery ship spawn timer when options are open
             lastUpdateTime = currentTime
             return
         }
+        
+        // Update Mystery Ship spawn timer
+        updateMysteryShipSpawning(currentTime: currentTime)
 
         for entity in entities { entity.update(deltaTime: dt) }
 
@@ -1669,6 +1878,42 @@ final class GameScene: SKScene {
             if isThrustingNeedle {
                 needle.applyThrust(dt: CGFloat(dt)); needle.flame.alpha = 1
             } else { needle.flame.alpha = 0 }
+            
+            // Update Mystery Ship AI if present
+            if let mystery = mysteryShip, !mystery.node.isHidden {
+                let mysteryState = state(for: mystery)
+                if mysteryState.aiEnabled {
+                    // Mystery Ship targets the closest visible ship
+                    var closestShip: Ship?
+                    var closestDist: CGFloat = .greatestFiniteMagnitude
+                    
+                    for ship in [needle!, dart!] {
+                        guard !ship.node.isHidden else { continue }
+                        let dx = ship.node.position.x - mystery.node.position.x
+                        let dy = ship.node.position.y - mystery.node.position.y
+                        let dist = hypot(dx, dy)
+                        if dist < closestDist {
+                            closestDist = dist
+                            closestShip = ship
+                        }
+                    }
+                    
+                    if let target = closestShip {
+                        let mysteryThrusting = updateShipAI(
+                            ship: mystery,
+                            opponent: target,
+                            currentTime: currentTime,
+                            dt: dt)
+                        
+                        if mysteryThrusting {
+                            mystery.applyThrust(dt: CGFloat(dt))
+                            mystery.flame.alpha = 1
+                        } else {
+                            mystery.flame.alpha = 0
+                        }
+                    }
+                }
+            }
 
         }
 
@@ -1705,6 +1950,12 @@ final class GameScene: SKScene {
 
         dart.clampSpeed(); needle.clampSpeed()
         dart.integrate(dt: CGFloat(dt)); needle.integrate(dt: CGFloat(dt))
+        
+        // Update Mystery Ship physics if present
+        if let mystery = mysteryShip, !mystery.node.isHidden {
+            mystery.clampSpeed()
+            mystery.integrate(dt: CGFloat(dt))
+        }
 
         if dt > 0 {
             for ship in ships {
@@ -1740,6 +1991,10 @@ final class GameScene: SKScene {
             }
         }
         handleEdges(dart); handleEdges(needle)
+        // Handle Mystery Ship edges too
+        if let mystery = mysteryShip, !mystery.node.isHidden {
+            handleEdges(mystery)
+        }
 
         enumerateChildNodes(withName: "missile") { node, _ in
             guard let data = node.userData,
@@ -1840,6 +2095,14 @@ final class GameScene: SKScene {
                     explodeShip(ship: dart)
                 }
             }
+            // Mystery Ship sun collision (no bonus points)
+            if let mystery = mysteryShip, !mystery.node.isHidden {
+                let dx = mystery.node.position.x - sun.position.x
+                let dy = mystery.node.position.y - sun.position.y
+                if dx*dx + dy*dy <= sunCollisionRadius*sunCollisionRadius {
+                    explodeShip(ship: mystery)
+                }
+            }
         }
 
         var needleHit = false, dartHit = false
@@ -1849,6 +2112,8 @@ final class GameScene: SKScene {
         var shipsHit: Set<ObjectIdentifier> = []  // Track which ships were hit this frame
         
         // Bullet vs Ship collisions
+        var mysteryShipKiller: Ship?  // Track who killed the Mystery Ship
+        
         enumerateChildNodes(withName: "missile") { node, _ in
             guard let owner = self.missileOwner.object(forKey: node),
                   let spawn = self.missileSpawnTime.object(forKey: node)?.doubleValue else { return }
@@ -1895,6 +2160,14 @@ final class GameScene: SKScene {
                 if destroyed {
                     shipsHit.insert(shipKey)
                     
+                    // Track Mystery Ship killer for bonus points
+                    // Only award bonus if killer is needle or dart (not self-inflicted)
+                    if ship === self.mysteryShip, let shooter = shooterShip {
+                        if shooter === self.needle || shooter === self.dart {
+                            mysteryShipKiller = shooter
+                        }
+                    }
+                    
                     // Update legacy hit flags for backward compatibility
                     if ship === self.needle { needleHit = true }
                     if ship === self.dart { dartHit = true }
@@ -1917,6 +2190,18 @@ final class GameScene: SKScene {
                 shipsHit.insert(key1)
                 shipsHit.insert(key2)
                 
+                // Award Mystery Ship bonus for ram kills
+                // Only award if the other ship is needle or dart (not another mystery ship collision)
+                if ships[i] === mysteryShip && ships[j] !== mysteryShip {
+                    if ships[j] === needle || ships[j] === dart {
+                        mysteryShipKiller = ships[j]
+                    }
+                } else if ships[j] === mysteryShip && ships[i] !== mysteryShip {
+                    if ships[i] === needle || ships[i] === dart {
+                        mysteryShipKiller = ships[i]
+                    }
+                }
+                
                 // Update legacy hit flags for backward compatibility
                 if ships[i] === needle || ships[j] === needle { needleHit = true }
                 if ships[i] === dart || ships[j] === dart { dartHit = true }
@@ -1927,10 +2212,17 @@ final class GameScene: SKScene {
         for ship in ships {
             let shipKey = ObjectIdentifier(ship.node)
             if shipsHit.contains(shipKey) {
+                // Award Mystery Ship bonus BEFORE explosion
+                if ship === mysteryShip, let killer = mysteryShipKiller {
+                    awardMysteryShipBonus(to: killer, at: ship.node.position)
+                }
+                
                 if !gameOver {
-                    // Award points to all OTHER ships
-                    for otherShip in ships where otherShip !== ship {
-                        incrementScore(for: otherShip)
+                    // Award points to all OTHER ships (but not for Mystery Ship kills)
+                    if ship !== mysteryShip {
+                        for otherShip in ships where otherShip !== ship {
+                            incrementScore(for: otherShip)
+                        }
                     }
                 }
                 recordKillTime(for: ship, at: currentTime)
@@ -1971,6 +2263,13 @@ final class GameScene: SKScene {
                 } else if currentOptionsTab == .game,
                           let btn = aimPersistToggleButton, btn.contains(locInOverlay) {
                     aimPersistsAfterLift.toggle(); refreshOptionsUI(); handled = true
+                } else if currentOptionsTab == .game,
+                          let btn = mysteryShipToggleButton, btn.contains(locInOverlay) {
+                    mysteryShipEnabled.toggle()
+                    if !mysteryShipEnabled {
+                        despawnMysteryShip()
+                    }
+                    refreshOptionsUI(); handled = true
                 }
                 if handled { continue }
                 

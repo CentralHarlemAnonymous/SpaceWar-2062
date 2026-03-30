@@ -45,9 +45,10 @@ extension GameScene {
     /// Currently selected ship indices for each wheel
     var leftWheelShipIndex: Int {
         get {
-            // Find needle's profile in allShips
+            // Find needle's profile in playable ships only
             guard let n = needle else { return 0 }
-            return ShipProfile.allShips.firstIndex(where: { $0.typeName == n.profile.typeName }) ?? 0
+            let playableShips = ShipProfile.allShips.filter { $0.playableByHuman }
+            return playableShips.firstIndex(where: { $0.typeName == n.profile.typeName }) ?? 0
         }
         set {
             // This will be set when we implement ship switching
@@ -57,7 +58,8 @@ extension GameScene {
     var rightWheelShipIndex: Int {
         get {
             guard let d = dart else { return 1 }
-            return ShipProfile.allShips.firstIndex(where: { $0.typeName == d.profile.typeName }) ?? 1
+            let playableShips = ShipProfile.allShips.filter { $0.playableByHuman }
+            return playableShips.firstIndex(where: { $0.typeName == d.profile.typeName }) ?? 1
         }
         set {
             // This will be set when we implement ship switching
@@ -118,7 +120,8 @@ extension GameScene {
         columnNode.zPosition = 202
         container.addChild(columnNode)
         
-        let allShips = ShipProfile.allShips
+        // Filter to only show playable ships in the selector
+        let allShips = ShipProfile.allShips.filter { $0.playableByHuman }
         let currentProfile = allShips[shipIndex]
         
         // Column header (Ship 1 / Ship 2)
@@ -399,7 +402,8 @@ extension GameScene {
     ///   - isLeft: true for left wheel (needle), false for right wheel (dart)
     ///   - direction: -1 for up/previous, +1 for down/next
     private func scrollShipWheel(isLeft: Bool, direction: Int) {
-        let allShips = ShipProfile.allShips
+        // Filter to only show playable ships
+        let allShips = ShipProfile.allShips.filter { $0.playableByHuman }
         let currentIndex = isLeft ? leftWheelShipIndex : rightWheelShipIndex
         let newIndex = (currentIndex + direction + allShips.count) % allShips.count
         let newProfile = allShips[newIndex]

@@ -366,11 +366,20 @@ extension GameScene {
         aimBtn.name = "game_aim_persist_toggle"; aimBtn.position = CGPoint(x: 0, y: h/2 - 260)
         aimBtn.strokeColor = .white; aimBtn.lineWidth = 2; aimBtn.zPosition = 202
         overlay.addChild(aimBtn); aimPersistToggleButton = aimBtn
+        
+        // Mystery Ship toggle
+        let mysteryLabel = makeLabel("Mystery Ship:", y: h/2 - 290, name: "game_label_mystery_ship")
+        overlay.addChild(mysteryLabel)
 
-        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 320, name: "game_label_virtual_screen")
+        let mysteryBtn = SKShapeNode(rectOf: CGSize(width: 40, height: 24), cornerRadius: 5)
+        mysteryBtn.name = "game_mystery_ship_toggle"; mysteryBtn.position = CGPoint(x: 0, y: h/2 - 315)
+        mysteryBtn.strokeColor = .white; mysteryBtn.lineWidth = 2; mysteryBtn.zPosition = 202
+        overlay.addChild(mysteryBtn); mysteryShipToggleButton = mysteryBtn
+
+        let vsLabel = makeLabel("Virtual Screen:", y: h/2 - 375, name: "game_label_virtual_screen")
         overlay.addChild(vsLabel)
 
-        let vsTrackY: CGFloat = h/2 - 342
+        let vsTrackY: CGFloat = h/2 - 397
         let vsTrack = SKShapeNode(rectOf: CGSize(width: sliderTrackWidth, height: 4), cornerRadius: 2)
         vsTrack.strokeColor = .white; vsTrack.fillColor = .white; vsTrack.alpha = 1.0
         vsTrack.position = CGPoint(x: 0, y: vsTrackY)
@@ -521,6 +530,7 @@ extension GameScene {
         aiToggleButton?.fillColor      = needleAIEnabled ? selFill : offFill
         wedgeAIToggleButton?.fillColor = wedgeAIEnabled  ? selFill : offFill
         aimPersistToggleButton?.fillColor = aimPersistsAfterLift ? selFill : offFill
+        mysteryShipToggleButton?.fillColor = mysteryShipEnabled ? selFill : offFill
 
         if let knob = gravitySliderKnob, let track = gravitySliderTrack {
             let x = -sliderTrackHalfWidth + CGFloat(gravitySliderSelection) * (sliderTrackWidth / CGFloat(gravitySliderSteps))

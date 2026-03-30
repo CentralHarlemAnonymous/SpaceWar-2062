@@ -197,6 +197,9 @@ struct ShipProfile {
     let shield:             ShieldType
     let turnRate:           TurnRate
     
+    // Gameplay control
+    let playableByHuman:    Bool        // if false, ship is AI-only and hidden from ship selector
+    
     // MARK: - Computed Properties (Apply Multipliers)
     
     var maxSpeed: CGFloat {
@@ -279,7 +282,8 @@ struct ShipProfile {
             hitPoints:           .medium,
             bulletPower:         .medium,
             shield:              .none,
-            turnRate:            .medium
+            turnRate:            .medium,
+            playableByHuman:     true
         )
     }()
 
@@ -329,7 +333,8 @@ struct ShipProfile {
             hitPoints:           .medium,
             bulletPower:         .medium,
             shield:              .none,
-            turnRate:            .medium
+            turnRate:            .medium,
+            playableByHuman:     true
         )
     }()
     
@@ -435,14 +440,124 @@ struct ShipProfile {
             hitPoints:           .high,
             bulletPower:         .low,
             shield:              .back,
-            turnRate:            .slow
+            turnRate:            .slow,
+            playableByHuman:     true
+        )
+    }()
+    
+    static let mysteryShip: ShipProfile = {
+        // Simple UFO design - Option 1: Simple Geometric
+        // 40px wide × 25px tall
+        let path = CGMutablePath()
+        
+        // Small dome on top (semicircle)
+        let domeRadius: CGFloat = 8
+        let domeY: CGFloat = 8
+        path.addArc(center: CGPoint(x: 0, y: domeY),
+                    radius: domeRadius,
+                    startAngle: 0,
+                    endAngle: .pi,
+                    clockwise: false)
+        
+        // Main oval body (ellipse)
+        let bodyWidth: CGFloat = 40
+        let bodyHeight: CGFloat = 12
+        let bodyRect = CGRect(x: -bodyWidth/2, y: -bodyHeight/2,
+                              width: bodyWidth, height: bodyHeight)
+        path.addEllipse(in: bodyRect)
+        
+        // Three landing gear dots at bottom
+        let gearRadius: CGFloat = 2
+        let gearY: CGFloat = -10
+        let gearSpacing: CGFloat = 14
+        
+        // Left gear
+        path.addArc(center: CGPoint(x: -gearSpacing, y: gearY),
+                    radius: gearRadius,
+                    startAngle: 0,
+                    endAngle: .pi * 2,
+                    clockwise: false)
+        // Center gear
+        path.addArc(center: CGPoint(x: 0, y: gearY),
+                    radius: gearRadius,
+                    startAngle: 0,
+                    endAngle: .pi * 2,
+                    clockwise: false)
+        // Right gear
+        path.addArc(center: CGPoint(x: gearSpacing, y: gearY),
+                    radius: gearRadius,
+                    startAngle: 0,
+                    endAngle: .pi * 2,
+                    clockwise: false)
+        
+        // Indicator silhouette at 70% scale for off-screen arrow
+        let s: CGFloat = 0.70
+        let ip = CGMutablePath()
+        
+        // Dome
+        ip.addArc(center: CGPoint(x: 0, y: domeY * s),
+                  radius: domeRadius * s,
+                  startAngle: 0,
+                  endAngle: .pi,
+                  clockwise: false)
+        
+        // Body
+        let iBodyRect = CGRect(x: -bodyWidth * s / 2, y: -bodyHeight * s / 2,
+                               width: bodyWidth * s, height: bodyHeight * s)
+        ip.addEllipse(in: iBodyRect)
+        
+        // Landing gear (smaller for indicator)
+        let iGearRadius = gearRadius * s
+        let iGearY = gearY * s
+        let iGearSpacing = gearSpacing * s
+        
+        ip.addArc(center: CGPoint(x: -iGearSpacing, y: iGearY),
+                  radius: iGearRadius,
+                  startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ip.addArc(center: CGPoint(x: 0, y: iGearY),
+                  radius: iGearRadius,
+                  startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ip.addArc(center: CGPoint(x: iGearSpacing, y: iGearY),
+                  radius: iGearRadius,
+                  startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        
+        return ShipProfile(
+            typeName:            "Mystery Ship",
+            notes:               "A rare visitor from beyond...",
+            indicatorColor:      SKColor(red: 0.2, green: 0.9, blue: 0.3, alpha: 1),  // Bright green
+            shipColor:           SKColor(red: 0.3, green: 1.0, blue: 0.4, alpha: 1),  // Slightly lighter green
+            shipLineWidth:       1.0,   // Thinner lines
+            shipGlowWidth:       1.5,   // Less glow
+            shipPath:            path,
+            muzzleY:             0,  // Fires from center
+            headDotRadius:       0,
+            headDotY:            0,
+            indicatorPath:       ip,
+            indicatorLineWidth:  1.0,   // Thinner indicator lines
+            indicatorGlowWidth:  1.5,   // Less indicator glow
+            indicatorHasHeadDot: false,
+            baseMaxSpeed:        400,
+            baseAcceleration:    250,
+            baseTurnSpeed:       .pi * 2,
+            baseBulletSpeed:     480,
+            baseFireInterval:    0.15,
+            baseStartingBullets: 40,
+            baseHitPoints:       1.0,
+            inventory:           .small,    // Low
+            fireRate:            .fast,     // High (fast = low interval)
+            flightSpeed:         .medium,   // Changed from .fast to .medium (normal speed)
+            hitPoints:           .low,      // Low
+            bulletPower:         .low,      // Low
+            shield:              .none,     // No shield
+            turnRate:            .slow,     // Slow
+            playableByHuman:     false      // AI-only
         )
     }()
     
     // MARK: - All Available Ships
     
     /// Array of all ship profiles available for selection
-    static let allShips: [ShipProfile] = [needle, dart, maagaa]
+    static let allShips: [ShipProfile] = [needle, dart, maagaa, mysteryShip]
     
     // MARK: - Factory Methods
     
