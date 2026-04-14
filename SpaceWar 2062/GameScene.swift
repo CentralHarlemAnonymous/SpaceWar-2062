@@ -178,7 +178,10 @@ final class GameScene: SKScene {
     var savedVirtualScreenSelection: Int = 0   // player's choice, preserved across game-over
     let virtualWorldRadius: CGFloat = 2000
     var virtualWorldCenter: CGPoint {
-        CGPoint(x: virtualWorldRadius, y: virtualWorldRadius)
+        switch virtualScreenMode {
+        case .off:    return CGPoint(x: size.width / 2, y: size.height / 2)
+        case .medium: return CGPoint(x: virtualWorldRadius, y: virtualWorldRadius)
+        }
     }
     var virtualWorldWidth: CGFloat {
         switch virtualScreenMode {
@@ -202,13 +205,9 @@ final class GameScene: SKScene {
     var cameraPanToDartAfter:   TimeInterval = 0
 
     // In virtual mode: which ship the camera follows.
-    // Release build always follows dart (wedge). Debug follows needle when only needle is human.
-    var shipToFollow: Ship {
-        #if DEBUG
-        if !needleAIEnabled && wedgeAIEnabled { return needle }
-        #endif
-        return dart
-    }
+    // If exactly one ship is AI, follow the human ship.
+    // If both are AI or both are human, alternate between them.
+    var cameraFollowedShip: Ship?
 
     // Stars + virtual boundary
     var starNodes: [SKShapeNode] = []
@@ -356,7 +355,7 @@ final class GameScene: SKScene {
         optionsButton?.position = CGPoint(x: s.width / 2, y: topY)
         optionsOverlay?.position = CGPoint(x: s.width / 2, y: s.height / 2)
 
-        sunNode?.position = CGPoint(x: virtualWorldWidth / 2, y: virtualWorldHeight / 2)
+        sunNode?.position = virtualWorldCenter
     }
 
     // MARK: - Lifecycle
@@ -762,7 +761,9 @@ final class GameScene: SKScene {
 
     // MARK: - Missiles
 
-    func fireMissile(from ship: Ship, muzzleOffset: CGPoint) {
+    /// Fires from all muzzle points on the ship. Consumes one bullet from inventory
+    /// regardless of how many projectiles are spawned.
+    func fireShip(_ ship: Ship) {
         if ship.node.isHidden { return }
 
         if ship === needle {
@@ -771,38 +772,52 @@ final class GameScene: SKScene {
             if dartBulletsRemaining == 0 { return }
         }
 
-        let missile = SKShapeNode(rectOf: CGSize(width: 4, height: 4), cornerRadius: 1)
-        missile.name = "missile"
-        missile.fillColor = .white
-        missile.strokeColor = .white
-        missile.glowWidth = 4
-        missile.zPosition = 20
-
+        let offsets = ship.allMuzzleOffsets()
+        let dmg = ship.profile.bulletPower.damage
+        let bulletSize = max(2.0, dmg * 4.0)
+        let bulletGlow = max(1.0, dmg * 4.0)
         let angle = ship.node.zRotation
-        let dx = muzzleOffset.x * cos(angle) - muzzleOffset.y * sin(angle)
-        let dy = muzzleOffset.x * sin(angle) + muzzleOffset.y * cos(angle)
-        missile.position = CGPoint(x: ship.node.position.x + dx, y: ship.node.position.y + dy)
-        addChild(missile)
-
         let velocityMagnitude = ship.profile.bulletSpeed
         let vx = -velocityMagnitude * sin(angle)
         let vy =  velocityMagnitude * cos(angle)
-        missile.userData = ["vx": vx, "vy": vy, "bounced": false]
-
-        missileOwner.setObject(ship.node, forKey: missile)
-        missileSpawnTime.setObject(NSNumber(value: CACurrentMediaTime()), forKey: missile)
-
+        let now = CACurrentMediaTime()
         let life = TimeInterval(bulletLifeSeconds)
-        missile.run(.sequence([.wait(forDuration: life), .removeFromParent()]))
 
+        for offset in offsets {
+            let missile = SKShapeNode(rectOf: CGSize(width: bulletSize, height: bulletSize), cornerRadius: 1)
+            missile.name = "missile"
+            missile.fillColor = .white
+            missile.strokeColor = .white
+            missile.glowWidth = bulletGlow
+            missile.zPosition = 20
+
+            let dx = offset.x * cos(angle) - offset.y * sin(angle)
+            let dy = offset.x * sin(angle) + offset.y * cos(angle)
+            missile.position = CGPoint(x: ship.node.position.x + dx, y: ship.node.position.y + dy)
+            addChild(missile)
+
+            missile.userData = ["vx": vx, "vy": vy, "bounced": false]
+
+            missileOwner.setObject(ship.node, forKey: missile)
+            missileSpawnTime.setObject(NSNumber(value: now), forKey: missile)
+            missile.run(.sequence([.wait(forDuration: life), .removeFromParent()]))
+        }
+
+        // Consume one bullet per projectile fired
+        let count = offsets.count
         if ship === needle {
-            if needleBulletsRemaining != Int.max { needleBulletsRemaining = max(0, needleBulletsRemaining - 1) }
+            if needleBulletsRemaining != Int.max { needleBulletsRemaining = max(0, needleBulletsRemaining - count) }
         } else if ship === dart {
-            if dartBulletsRemaining != Int.max { dartBulletsRemaining = max(0, dartBulletsRemaining - 1) }
+            if dartBulletsRemaining != Int.max { dartBulletsRemaining = max(0, dartBulletsRemaining - count) }
         }
 
         refreshBulletCounters()
         endGameIfNoBullets()
+    }
+
+    /// Legacy single-muzzle entry point (kept for compatibility)
+    func fireMissile(from ship: Ship, muzzleOffset: CGPoint) {
+        fireShip(ship)
     }
 
     // MARK: - Explosions / Wreckage
@@ -824,7 +839,8 @@ final class GameScene: SKScene {
         st.cameraPanAfter = now + panDelay
 
         ship.hide()
-        
+        switchCameraOnDeath(deadShip: ship)
+
         // Reset mystery ship spawn timer on ANY explosion of needle or dart
         // (regardless of who killed them)
         if ship === needle || ship === dart {
@@ -892,13 +908,20 @@ final class GameScene: SKScene {
     }
     
     private func spawnMysteryShip(currentTime: TimeInterval) {
-        // Create mystery ship at random position within the circular world
-        let angle = CGFloat.random(in: 0...(2 * .pi))
-        let r = sqrt(CGFloat.random(in: 0...1)) * (virtualWorldRadius - 100)
-        let randomPos = CGPoint(
-            x: virtualWorldCenter.x + r * cos(angle),
-            y: virtualWorldCenter.y + r * sin(angle)
-        )
+        // Create mystery ship at random position within the world
+        let randomPos: CGPoint
+        if virtualScreenMode == .off {
+            let inset: CGFloat = 50
+            randomPos = CGPoint(
+                x: CGFloat.random(in: inset...(size.width - inset)),
+                y: CGFloat.random(in: inset...(size.height - inset)))
+        } else {
+            let angle = CGFloat.random(in: 0...(2 * .pi))
+            let r = sqrt(CGFloat.random(in: 0...1)) * (virtualWorldRadius - 100)
+            randomPos = CGPoint(
+                x: virtualWorldCenter.x + r * cos(angle),
+                y: virtualWorldCenter.y + r * sin(angle))
+        }
         
         let mystery = Ship(
             profile: .mysteryShip,
@@ -1111,8 +1134,9 @@ final class GameScene: SKScene {
 
         updateNeedleControlsVisibility()
         updateWedgeControlsVisibility()
+        cameraFollowedShip = nil
         if virtualScreenMode != .off {
-            let follow = shipToFollow
+            let follow = resolveFollowedShip(currentTime: lastUpdateTime)
             cameraCenter = follow.node.isHidden ? follow.spawnPosition : follow.node.position
             cameraNode.position = cameraCenter
         }
@@ -1512,11 +1536,34 @@ final class GameScene: SKScene {
         if virtualScreenMode == .off {
             cameraCenter = CGPoint(x: size.width / 2, y: size.height / 2)
         } else {
-            let follow = shipToFollow
+            let follow = resolveFollowedShip(currentTime: lastUpdateTime)
             cameraCenter = follow.node.isHidden ? virtualWorldCenter
                                                 : follow.node.position
         }
         cameraNode.position = cameraCenter
+    }
+
+    /// Determines which ship the camera should follow during gameplay.
+    /// - One human, one AI: always follow the human ship.
+    /// - Both same type: follow one until it dies, then switch to the other.
+    private func resolveFollowedShip(currentTime: TimeInterval) -> Ship {
+        let needleIsAI = needleAIEnabled
+        let dartIsAI = wedgeAIEnabled
+
+        // Exactly one AI — always follow the human ship
+        if needleIsAI && !dartIsAI { return dart }
+        if !needleIsAI && dartIsAI { return needle }
+
+        // Both same control type — switch on death
+        if cameraFollowedShip == nil { cameraFollowedShip = dart }
+        return cameraFollowedShip!
+    }
+
+    /// Called when a ship is destroyed to switch camera to the survivor.
+    func switchCameraOnDeath(deadShip: Ship) {
+        if deadShip === cameraFollowedShip {
+            cameraFollowedShip = (deadShip === needle) ? dart : needle
+        }
     }
 
     // MARK: - Camera update (called every frame from update())
@@ -1530,12 +1577,12 @@ final class GameScene: SKScene {
             return
         }
 
-        #if DEBUG
-        let followed: Ship = gameOver ? (gameOverFollowedShip ?? dart)
-                           : (!needleAIEnabled && wedgeAIEnabled) ? needle : dart
-        #else
-        let followed: Ship = gameOver ? (gameOverFollowedShip ?? dart) : dart
-        #endif
+        let followed: Ship
+        if gameOver {
+            followed = gameOverFollowedShip ?? dart
+        } else {
+            followed = resolveFollowedShip(currentTime: currentTime)
+        }
 
         let target: CGPoint
         if !followed.node.isHidden {
@@ -1724,18 +1771,25 @@ final class GameScene: SKScene {
     }
 
     private func safeRandomPosition(avoiding ship: Ship) -> CGPoint? {
-        let center = virtualWorldCenter
-        let radius = virtualWorldRadius
         let inset: CGFloat = 20
         let otherShip: Ship = (ship === needle) ? dart! : needle!
         // Minimum safe separation from the opponent ship (pixels)
         let minShipSeparation: CGFloat = 200
         for _ in 0..<100 {
-            // Random point within the circular world
-            let angle = CGFloat.random(in: 0...(2 * .pi))
-            let r = sqrt(CGFloat.random(in: 0...1)) * (radius - inset)
-            let p = CGPoint(x: center.x + r * cos(angle),
+            let p: CGPoint
+            if virtualScreenMode == .off {
+                // Random point within the screen rectangle
+                p = CGPoint(x: CGFloat.random(in: inset...(size.width - inset)),
+                            y: CGFloat.random(in: inset...(size.height - inset)))
+            } else {
+                // Random point within the circular world
+                let center = virtualWorldCenter
+                let radius = virtualWorldRadius
+                let angle = CGFloat.random(in: 0...(2 * .pi))
+                let r = sqrt(CGFloat.random(in: 0...1)) * (radius - inset)
+                p = CGPoint(x: center.x + r * cos(angle),
                             y: center.y + r * sin(angle))
+            }
             // Reject if too close to the other ship
             if !otherShip.node.isHidden {
                 let dx = otherShip.node.position.x - p.x
@@ -2061,6 +2115,30 @@ final class GameScene: SKScene {
         }
 
         func handleEdges(_ ship: Ship) {
+            if virtualScreenMode == .off {
+                // Rectangle boundary matching the screen
+                let damping: CGFloat = 0.85
+                let minX: CGFloat = 0, maxX = size.width
+                let minY: CGFloat = 0, maxY = size.height
+
+                if ship.node.position.x < minX {
+                    ship.node.position.x = minX
+                    if ship.velocity.dx < 0 { ship.velocity.dx *= -damping }
+                } else if ship.node.position.x > maxX {
+                    ship.node.position.x = maxX
+                    if ship.velocity.dx > 0 { ship.velocity.dx *= -damping }
+                }
+                if ship.node.position.y < minY {
+                    ship.node.position.y = minY
+                    if ship.velocity.dy < 0 { ship.velocity.dy *= -damping }
+                } else if ship.node.position.y > maxY {
+                    ship.node.position.y = maxY
+                    if ship.velocity.dy > 0 { ship.velocity.dy *= -damping }
+                }
+                return
+            }
+
+            // Circular boundary for virtual world
             let center = virtualWorldCenter
             let radius = virtualWorldRadius
             let edgeZone: CGFloat = 50
@@ -2071,13 +2149,10 @@ final class GameScene: SKScene {
             let dist = hypot(dx, dy)
 
             if dist > radius - edgeZone && dist > 0 {
-                // Unit vector pointing outward from center
                 let nx = dx / dist, ny = dy / dist
-                // Radial velocity component (positive = moving outward)
                 let radialVel = ship.velocity.dx * nx + ship.velocity.dy * ny
 
                 if radialVel > 0 {
-                    // Damp the outward component of velocity
                     ship.velocity.dx -= radialVel * (1 - damping) * nx
                     ship.velocity.dy -= radialVel * (1 - damping) * ny
                 }
@@ -2088,7 +2163,6 @@ final class GameScene: SKScene {
                 let nx = dx / dist, ny = dy / dist
                 ship.node.position = CGPoint(x: center.x + nx * radius,
                                              y: center.y + ny * radius)
-                // Zero out the outward velocity component
                 let radialVel = ship.velocity.dx * nx + ship.velocity.dy * ny
                 if radialVel > 0 {
                     ship.velocity.dx -= radialVel * nx

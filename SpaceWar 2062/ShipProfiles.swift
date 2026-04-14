@@ -166,10 +166,13 @@ struct ShipProfile {
     // Appearance
     let indicatorColor:     SKColor     // border arrow, distance labels, buttons
     let shipColor:          SKColor     // stroke color of the live ship node
+    let shipFillColor:      SKColor     // fill color of the ship body (.clear for open paths like needle)
+    let shipFillPath:       CGPath?     // closed outline for opaque fill (nil = use shipPath, separate to avoid even-odd issues)
     let shipLineWidth:      CGFloat     // line width of the ship's path
     let shipGlowWidth:      CGFloat     // glow width of the ship's path
     let shipPath:           CGPath      // canonical, unscaled path used to draw the ship
-    let muzzleY:            CGFloat     // y of the firing tip in ship-local coordinates
+    let muzzleY:            CGFloat     // y of the firing tip in ship-local coordinates (single-fire ships)
+    let muzzleOffsets:      [CGPoint]   // all muzzle positions in ship-local coords; overrides muzzleY when count > 1
     let headDotRadius:      CGFloat     // radius of the nose dot; 0 = no dot
     let headDotY:           CGFloat     // y of the nose dot in ship-local coordinates
 
@@ -259,10 +262,14 @@ struct ShipProfile {
             notes:               "Classic balanced fighter.",
             indicatorColor:      SKColor(red: 0.9, green: 0.45, blue: 0.15, alpha: 1),
             shipColor:           .white,
+            shipFillColor:       .clear,
+            shipFillPath:        nil,
             shipLineWidth:       2,
             shipGlowWidth:       4,
             shipPath:            path,
             muzzleY:             21,
+            muzzleOffsets:       [CGPoint(x: 0, y: 21)],
+
             headDotRadius:       8,
             headDotY:            21,
             indicatorPath:       ip,
@@ -294,7 +301,14 @@ struct ShipProfile {
         path.addLine(to: CGPoint(x:  14, y: -14))
         path.addLine(to: CGPoint(x: 0,   y:  -6))
         path.addLine(to: CGPoint(x: -14, y: -14))
-        path.addLine(to: CGPoint(x: 0,   y:  16))
+        path.closeSubpath()
+
+        // Fill outline — outer triangle only (no notch), so fill is solid
+        let fp = CGMutablePath()
+        fp.move(to: CGPoint(x: 0, y: 16))
+        fp.addLine(to: CGPoint(x: 14, y: -14))
+        fp.addLine(to: CGPoint(x: -14, y: -14))
+        fp.closeSubpath()
 
         // Indicator silhouette at 85 % scale
         let s: CGFloat = 0.85
@@ -310,10 +324,14 @@ struct ShipProfile {
             notes:               "Classic balanced fighter.",
             indicatorColor:      SKColor(red: 0.25, green: 0.6, blue: 1.0, alpha: 1),
             shipColor:           .white,
+            shipFillColor:       .black,
+            shipFillPath:        fp,
             shipLineWidth:       2,
             shipGlowWidth:       4,
             shipPath:            path,
             muzzleY:             16,
+            muzzleOffsets:       [CGPoint(x: 0, y: 16)],
+
             headDotRadius:       0,
             headDotY:            0,
             indicatorPath:       ip,
@@ -337,7 +355,7 @@ struct ShipProfile {
             playableByHuman:     true
         )
     }()
-    
+
     static let maagaa: ShipProfile = {
         // Baseball cap shape - corrected based on your clarification
         let path = CGMutablePath()
@@ -394,7 +412,24 @@ struct ShipProfile {
         ))
         
         let muzzleY: CGFloat = brimTopY
-        
+
+        // Fill path: crown circle + brim as single closed shape
+        let fp = CGMutablePath()
+        // Arc the bottom of the crown (from right connection around the bottom to left connection)
+        let rightAngle = atan2(crownConnectionY, crownConnectionX)
+        fp.addArc(center: CGPoint(x: 0, y: crownCenterY),
+                  radius: crownRadius,
+                  startAngle: rightAngle,
+                  endAngle: .pi - rightAngle,
+                  clockwise: true)
+        // Up left side to brim
+        fp.addLine(to: CGPoint(x: -crownConnectionX, y: brimCenterY))
+        // Brim curve across the top
+        fp.addQuadCurve(to: CGPoint(x: crownConnectionX, y: brimCenterY),
+                        control: CGPoint(x: 0, y: brimTopY))
+        // Down right side back to crown
+        fp.closeSubpath()
+
         // Indicator silhouette at 65% scale
         let s: CGFloat = 0.65
         let ip = CGMutablePath()
@@ -417,10 +452,14 @@ struct ShipProfile {
             notes:               "Slow but strong, best attacked head-on.",
             indicatorColor:      SKColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 1),  // Red
             shipColor:           .white,
+            shipFillColor:       .black,
+            shipFillPath:        fp,
             shipLineWidth:       1.0,
             shipGlowWidth:       2.75,
             shipPath:            path,
             muzzleY:             muzzleY,
+            muzzleOffsets:       [CGPoint(x: 0, y: muzzleY)],
+
             headDotRadius:       0,
             headDotY:            0,
             indicatorPath:       ip,
@@ -444,7 +483,7 @@ struct ShipProfile {
             playableByHuman:     true
         )
     }()
-    
+
     static let mysteryShip: ShipProfile = {
         // Simple UFO design - Option 1: Simple Geometric
         // 40px wide × 25px tall
@@ -521,15 +560,27 @@ struct ShipProfile {
                   radius: iGearRadius,
                   startAngle: 0, endAngle: .pi * 2, clockwise: false)
         
+        // Fill path: body ellipse + dome as one closed shape
+        let fp = CGMutablePath()
+        fp.addEllipse(in: bodyRect)
+        fp.addArc(center: CGPoint(x: 0, y: domeY),
+                  radius: domeRadius,
+                  startAngle: 0, endAngle: .pi, clockwise: false)
+        fp.closeSubpath()
+
         return ShipProfile(
             typeName:            "Mystery Ship",
             notes:               "A rare visitor from beyond...",
             indicatorColor:      SKColor(red: 0.2, green: 0.9, blue: 0.3, alpha: 1),  // Bright green
             shipColor:           SKColor(red: 0.3, green: 1.0, blue: 0.4, alpha: 1),  // Slightly lighter green
+            shipFillColor:       .black,
+            shipFillPath:        fp,
             shipLineWidth:       1.0,   // Thinner lines
             shipGlowWidth:       1.5,   // Less glow
             shipPath:            path,
             muzzleY:             0,  // Fires from center
+            muzzleOffsets:       [CGPoint(x: 0, y: 0)],
+
             headDotRadius:       0,
             headDotY:            0,
             indicatorPath:       ip,
@@ -554,10 +605,126 @@ struct ShipProfile {
         )
     }()
     
+    static let tlhIngan: ShipProfile = {
+        // Klingon Bird of Prey — forward-swept wings with gun tips, narrow neck, command pod
+        let path = CGMutablePath()
+
+        // Full outline, starting at head pod top, clockwise
+        path.move(to: CGPoint(x: 0, y: 22))       // top of command pod
+        path.addLine(to: CGPoint(x: 3, y: 18))     // pod right
+        path.addLine(to: CGPoint(x: 2, y: 14))     // neck right
+        path.addLine(to: CGPoint(x: 5, y: 8))      // body widens
+        path.addLine(to: CGPoint(x: 20, y: 14))    // right wing forward sweep to gun tip
+        path.addLine(to: CGPoint(x: 21, y: 12))    // right gun barrel tip
+        path.addLine(to: CGPoint(x: 8, y: 0))      // wing trailing edge
+        path.addLine(to: CGPoint(x: 6, y: -6))     // body lower right
+        path.addLine(to: CGPoint(x: 4, y: -14))    // rear right
+        path.addLine(to: CGPoint(x: 0, y: -16))    // tail center
+        path.addLine(to: CGPoint(x: -4, y: -14))   // rear left
+        path.addLine(to: CGPoint(x: -6, y: -6))    // body lower left
+        path.addLine(to: CGPoint(x: -8, y: 0))     // left wing trailing edge
+        path.addLine(to: CGPoint(x: -21, y: 12))   // left gun barrel tip
+        path.addLine(to: CGPoint(x: -20, y: 14))   // left wing tip
+        path.addLine(to: CGPoint(x: -5, y: 8))     // body left
+        path.addLine(to: CGPoint(x: -2, y: 14))    // neck left
+        path.addLine(to: CGPoint(x: -3, y: 18))    // pod left
+        path.closeSubpath()
+
+        // Neck detail line
+        path.move(to: CGPoint(x: -2, y: 14))
+        path.addLine(to: CGPoint(x: 2, y: 14))
+
+        // Wing spar lines (structural detail)
+        path.move(to: CGPoint(x: 5, y: 4))
+        path.addLine(to: CGPoint(x: 14, y: 10))
+        path.move(to: CGPoint(x: -5, y: 4))
+        path.addLine(to: CGPoint(x: -14, y: 10))
+
+        // Fill path: just the closed outline, no detail lines
+        let fp = CGMutablePath()
+        fp.move(to: CGPoint(x: 0, y: 22))
+        fp.addLine(to: CGPoint(x: 3, y: 18))
+        fp.addLine(to: CGPoint(x: 2, y: 14))
+        fp.addLine(to: CGPoint(x: 5, y: 8))
+        fp.addLine(to: CGPoint(x: 20, y: 14))
+        fp.addLine(to: CGPoint(x: 21, y: 12))
+        fp.addLine(to: CGPoint(x: 8, y: 0))
+        fp.addLine(to: CGPoint(x: 6, y: -6))
+        fp.addLine(to: CGPoint(x: 4, y: -14))
+        fp.addLine(to: CGPoint(x: 0, y: -16))
+        fp.addLine(to: CGPoint(x: -4, y: -14))
+        fp.addLine(to: CGPoint(x: -6, y: -6))
+        fp.addLine(to: CGPoint(x: -8, y: 0))
+        fp.addLine(to: CGPoint(x: -21, y: 12))
+        fp.addLine(to: CGPoint(x: -20, y: 14))
+        fp.addLine(to: CGPoint(x: -5, y: 8))
+        fp.addLine(to: CGPoint(x: -2, y: 14))
+        fp.addLine(to: CGPoint(x: -3, y: 18))
+        fp.closeSubpath()
+
+        // Indicator silhouette at 65% scale
+        let s: CGFloat = 0.65
+        let ip = CGMutablePath()
+        ip.move(to: CGPoint(x: 0, y: 22*s))
+        ip.addLine(to: CGPoint(x: 3*s, y: 18*s))
+        ip.addLine(to: CGPoint(x: 2*s, y: 14*s))
+        ip.addLine(to: CGPoint(x: 5*s, y: 8*s))
+        ip.addLine(to: CGPoint(x: 20*s, y: 14*s))
+        ip.addLine(to: CGPoint(x: 21*s, y: 12*s))
+        ip.addLine(to: CGPoint(x: 8*s, y: 0))
+        ip.addLine(to: CGPoint(x: 6*s, y: -6*s))
+        ip.addLine(to: CGPoint(x: 4*s, y: -14*s))
+        ip.addLine(to: CGPoint(x: 0, y: -16*s))
+        ip.addLine(to: CGPoint(x: -4*s, y: -14*s))
+        ip.addLine(to: CGPoint(x: -6*s, y: -6*s))
+        ip.addLine(to: CGPoint(x: -8*s, y: 0))
+        ip.addLine(to: CGPoint(x: -21*s, y: 12*s))
+        ip.addLine(to: CGPoint(x: -20*s, y: 14*s))
+        ip.addLine(to: CGPoint(x: -5*s, y: 8*s))
+        ip.addLine(to: CGPoint(x: -2*s, y: 14*s))
+        ip.addLine(to: CGPoint(x: -3*s, y: 18*s))
+        ip.closeSubpath()
+
+        return ShipProfile(
+            typeName:            "TlhIngan",
+            notes:               "Fast raider with twin guns.",
+            indicatorColor:      SKColor(red: 0.7, green: 0.15, blue: 0.15, alpha: 1),
+            shipColor:           .white,
+            shipFillColor:       .black,
+            shipFillPath:        fp,
+            shipLineWidth:       1.5,
+            shipGlowWidth:       2.5,
+            shipPath:            path,
+            muzzleY:             13,   // midpoint of gun tips for fallback
+            muzzleOffsets:       [CGPoint(x: -21, y: 12), CGPoint(x: 21, y: 12)],
+            headDotRadius:       0,
+            headDotY:            0,
+            indicatorPath:       ip,
+            indicatorLineWidth:  1.4,
+            indicatorGlowWidth:  2,
+            indicatorHasHeadDot: false,
+            baseMaxSpeed:        400,
+            baseAcceleration:    250,
+            baseTurnSpeed:       .pi * 2,
+            baseBulletSpeed:     480,
+            baseFireInterval:    0.15,
+            baseStartingBullets: 40,
+            baseHitPoints:       1.0,
+            inventory:           .large,
+            fireRate:            .medium,
+            flightSpeed:         .fast,
+            hitPoints:           .medium,
+            bulletPower:         .low,
+            shield:              .none,
+            turnRate:            .medium,
+            playableByHuman:     true
+        )
+    }()
+
     // MARK: - All Available Ships
-    
+
     /// Array of all ship profiles available for selection
-    static let allShips: [ShipProfile] = [needle, dart, maagaa, mysteryShip]
+    static let allShips: [ShipProfile] = [needle, dart, tlhIngan, maagaa, mysteryShip]
     
     // MARK: - Factory Methods
     
@@ -598,11 +765,32 @@ final class Ship {
 
     init(profile: ShipProfile, flame: SKShapeNode, spawn: CGPoint) {
         self.profile = profile
-        self.node = SKShapeNode(path: profile.shipPath)
-        self.node.strokeColor = profile.shipColor
-        self.node.lineWidth = profile.shipLineWidth
-        self.node.glowWidth = profile.shipGlowWidth
-        self.node.zPosition = 1
+        // If the ship has an opaque fill, use the fill path as the main node
+        // and add the detail stroke path as a child on top.
+        if profile.shipFillColor != .clear, let fillPath = profile.shipFillPath {
+            self.node = SKShapeNode(path: fillPath)
+            self.node.strokeColor = .clear
+            self.node.fillColor = profile.shipFillColor
+            self.node.lineWidth = 0
+            self.node.glowWidth = 0
+            self.node.zPosition = 3
+
+            let stroke = SKShapeNode(path: profile.shipPath)
+            stroke.strokeColor = profile.shipColor
+            stroke.fillColor = .clear
+            stroke.lineWidth = profile.shipLineWidth
+            stroke.glowWidth = profile.shipGlowWidth
+            stroke.zPosition = 1
+            stroke.name = "strokeBody"
+            self.node.addChild(stroke)
+        } else {
+            self.node = SKShapeNode(path: profile.shipPath)
+            self.node.strokeColor = profile.shipColor
+            self.node.fillColor = .clear
+            self.node.lineWidth = profile.shipLineWidth
+            self.node.glowWidth = profile.shipGlowWidth
+            self.node.zPosition = 3
+        }
 
         self.flame = flame
         self.flame.alpha = 0
@@ -636,7 +824,8 @@ final class Ship {
         if profile.headDotRadius > 0 {
             let dot = SKShapeNode(circleOfRadius: profile.headDotRadius)
             dot.fillColor = .white
-            dot.strokeColor = .clear
+            dot.strokeColor = .white
+            dot.glowWidth = 2
             dot.position = CGPoint(x: 0, y: profile.headDotY)
             dot.zPosition = 3
             dot.name = "headDot"
@@ -770,6 +959,13 @@ final class Ship {
     
     func muzzleOffset() -> CGPoint {
         return CGPoint(x: 0, y: profile.muzzleY)
+    }
+
+    func allMuzzleOffsets() -> [CGPoint] {
+        if profile.muzzleOffsets.count > 1 {
+            return profile.muzzleOffsets
+        }
+        return [CGPoint(x: 0, y: profile.muzzleY)]
     }
     
     func createDebrisPieces() -> [SKShapeNode] {

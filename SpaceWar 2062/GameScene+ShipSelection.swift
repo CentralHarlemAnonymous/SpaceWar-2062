@@ -209,15 +209,23 @@ extension GameScene {
             columnNode.addChild(label)
         }
         
-        // Show 4 key stats
+        // Show key stats
         addCompactStat("Inv: \(currentProfile.inventory.label)", row: 0)
         addCompactStat("Speed: \(currentProfile.flightSpeed.label)", row: 1)
         addCompactStat("HP: \(currentProfile.hitPoints.label)", row: 2)
         addCompactStat("Fire: \(currentProfile.fireRate.label)", row: 3)
-        
+
+        let gunCount = currentProfile.muzzleOffsets.count
+        let bulletLabel = gunCount > 1
+            ? "Damage: \(currentProfile.bulletPower.label) ×\(gunCount)"
+            : "Damage: \(currentProfile.bulletPower.label)"
+        addCompactStat(bulletLabel, row: 4)
+
+        var nextRow = 5
         // Only show shield if present
         if currentProfile.shield != .none {
-            addCompactStat("Shield: \(currentProfile.shield.label)", row: 4)
+            addCompactStat("Shield: \(currentProfile.shield.label)", row: nextRow)
+            nextRow += 1
         }
     }
     
@@ -335,7 +343,12 @@ extension GameScene {
         addStat("Fire Rate: \(profile.fireRate.label)", row: 2)
         addStat("Speed: \(profile.flightSpeed.label)", row: 3)
         addStat("HP: \(profile.hitPoints.label)", row: 4)
-        addStat("Bullet Power: \(profile.bulletPower.label)", row: 5)
+        let gunCount = profile.muzzleOffsets.count
+        if gunCount > 1 {
+            addStat("Bullet Damage: \(profile.bulletPower.label) ×\(gunCount)", row: 5)
+        } else {
+            addStat("Bullet Damage: \(profile.bulletPower.label)", row: 5)
+        }
         addStat("Turn Rate: \(profile.turnRate.label)", row: 6)
         
         // Notes (word-wrapped if long)
